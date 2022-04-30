@@ -1,0 +1,14 @@
+{
+  "bindings": [
+    {
+      "type": "eventHubTrigger",
+      "name": "IoTHubIngest",
+      "direction": "in",
+      "eventHubName": "enviro-station-hub",
+      "connection": "IoTHubConnection",
+      "cardinality": "many",
+      "consumerGroup": "$Default",
+      "dataType": "string"
+    }
+  ]
+}
