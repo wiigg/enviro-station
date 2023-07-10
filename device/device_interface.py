@@ -12,12 +12,12 @@ except ImportError:
 
 import logging
 
-from utilities import get_cpu_temperature, check_wifi, get_serial_number
+from device_utilities import get_cpu_temperature, check_wifi, get_serial_number
 
 
-class HardwareInterface:
+class DeviceInterface:
     def __init__(self):
-        """Initialise hardware interface"""
+        """Initialise device interface"""
         self.bus = SMBus(1)
         self.bme280 = BME280(i2c_dev=self.bus)
         self.pms5003 = PMS5003()

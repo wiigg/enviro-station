@@ -1,7 +1,6 @@
 from azure.iot.device import IoTHubSession, MQTTConnectionFailedError, MQTTError
 import json
 import logging
-import asyncio
 
 
 class AzTransmitter:
