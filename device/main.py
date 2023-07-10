@@ -3,14 +3,16 @@ from utilities import get_cpu_temperature, get_serial_number, check_wifi
 from hardware_interface import HardwareInterface
 from az_transmitter import AzTransmitter
 import time
+from dotenv import load_dotenv
 import os
 import logging
 
 # Constants
-UPDATE_INTERVAL = 145  # milliseconds
+UPDATE_INTERVAL = 500  # milliseconds
 
 
 def main():
+    load_dotenv()
     # Initialise hardware interface and Azure transmitter
     hardware = HardwareInterface()
     transmitter = AzTransmitter(os.getenv["AZURE_CONNECTION_STRING"])

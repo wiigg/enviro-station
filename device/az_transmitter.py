@@ -38,7 +38,6 @@ class AzTransmitter:
             return True
         except Exception as e:
             logging.warning(f"Failed to send data to Azure IoT Hub: {e}")
-            self.disconnect()
             return False
 
     def disconnect(self):
