@@ -42,28 +42,34 @@ class HardwareInterface:
 
     def read_values(self):
         """Read values from BME280 and PMS5003 and return as dict"""
-        values = {}
         cpu_temp = get_cpu_temperature()
         raw_temp = self.bme280.get_temperature()
         comp_temp = raw_temp - ((cpu_temp - raw_temp) / self.comp_factor)
-        values["temperature"] = "{:.2f}".format(comp_temp)
-        values["pressure"] = "{:.2f}".format(self.bme280.get_pressure() * 100)
-        values["humidity"] = "{:.2f}".format(self.bme280.get_humidity())
-        values["oxidised"] = "{:.2f}".format(self.gas.oxidising / 1000)
-        values["reduced"] = "{:.2f}".format(self.gas.reducing / 1000)
-        values["nh3"] = "{:.2f}".format(self.gas.nh3 / 1000)
-        try:
-            pm_values = self.pms5003.read()
-            values["P1"] = str(pm_values.pm_ug_per_m3(1.0))
-            values["P2"] = str(pm_values.pm_ug_per_m3(2.5))
-            values["P10"] = str(pm_values.pm_ug_per_m3(10))
-        except (ReadTimeoutError, ChecksumMismatchError):
-            logging.info("Failed to read PMS5003. Reseting and retrying.")
-            self.pms5003.reset()
-            pm_values = self.pms5003.read()
-            values["P1"] = str(pm_values.pm_ug_per_m3(1.0))
-            values["P2"] = str(pm_values.pm_ug_per_m3(2.5))
-            values["P10"] = str(pm_values.pm_ug_per_m3(10))
+
+        values = {
+            "temperature": "{:.2f}".format(comp_temp),
+            "pressure": "{:.2f}".format(self.bme280.get_pressure() * 100),
+            "humidity": "{:.2f}".format(self.bme280.get_humidity()),
+            "oxidised": "{:.2f}".format(self.gas.oxidising / 1000),
+            "reduced": "{:.2f}".format(self.gas.reducing / 1000),
+            "nh3": "{:.2f}".format(self.gas.nh3 / 1000),
+        }
+
+        for _ in range(2):  # try twice
+            try:
+                pm_values = self.pms5003.read()
+                values.update(
+                    {
+                        "P1": str(pm_values.pm_ug_per_m3(1.0)),
+                        "P2": str(pm_values.pm_ug_per_m3(2.5)),
+                        "P10": str(pm_values.pm_ug_per_m3(10)),
+                    }
+                )
+                break  # if no exception, break the loop
+            except (ReadTimeoutError, ChecksumMismatchError):
+                logging.info("Failed to read PMS5003. Resetting and retrying.")
+                self.pms5003.reset()
+
         return values
 
     def display_status(self):
