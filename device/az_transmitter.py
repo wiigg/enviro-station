@@ -1,4 +1,8 @@
-from azure.iot.device import IoTHubDeviceClient, Message
+from azure.iot.device import (
+    IoTHubSession,
+    MQTTConnectionDroppedError,
+    MQTTConnectionFailedError,
+)
 import json
 import uuid
 import logging
@@ -6,13 +10,15 @@ import logging
 
 class AzTransmitter:
     def __init__(self, connection_string):
-        self.client = IoTHubDeviceClient.create_from_connection_string(
-            connection_string
-        )
+        print("Connecting to IoT Hub...")
+        try:
+            self.session = IoTHubSession.from_connection_string(connection_string)
+            print("Connection established.")
+        except MQTTConnectionFailedError:
+            logging.warning("Could not connect. Exiting...")
+            raise
 
-        self.client.connect()
-
-    def send_to_azure(self, values, id):
+    async def send_to_azure(self, values, id):
         """Send data to Azure IoT Hub"""
         pm_values = dict(i for i in values.items() if i[0].startswith("P"))
         temp_values = dict(i for i in values.items() if not i[0].startswith("P"))
@@ -28,17 +34,11 @@ class AzTransmitter:
         data = pm_values_json + temp_values_json
 
         try:
-            print("Sending data to Azure IoT Hub...")
+            print("Sending data to IoT Hub...")
             json_data = json.dumps(data)
-            message = Message(json_data)
-            message.message_id = uuid.uuid4()
-            message.content_encoding = "utf-8"
-            message.content_type = "application/json"
-            self.client.send_message(message)
+            await self.session.send_message(json_data)
+            print("Message sent.")
             return True
-        except Exception as e:
-            logging.warning(f"Failed to send data to Azure IoT Hub: {e}")
+        except MQTTConnectionDroppedError:
+            logging.warning("Connection dropped. Exiting...")
             return False
-
-    def disconnect(self):
-        self.device_client.shutdown()
