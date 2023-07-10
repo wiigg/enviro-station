@@ -1,0 +1,13 @@
+[Unit]
+Description=Enviro Station
+
+[Service]
+ExecStart=/usr/bin/python3 <<PATH_TO_DEVICE_PROGRAM>>
+WorkingDirectory=<<WORKING_DIRECTORY>>
+StandardOutput=inherit
+StandardError=inherit
+Restart=always
+User=<<USER>>
+
+[Install]
+WantedBy=multi-user.target
