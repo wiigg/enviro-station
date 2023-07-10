@@ -1,6 +1,7 @@
 import ST7735
 from pms5003 import PMS5003, ReadTimeoutError, ChecksumMismatchError
 from bme280 import BME280
+from enviroplus import gas
 from PIL import Image, ImageDraw, ImageFont
 from fonts.ttf import RobotoMedium as UserFont
 
@@ -20,20 +21,22 @@ class HardwareInterface:
         self.bus = SMBus(1)
         self.bme280 = BME280(i2c_dev=self.bus)
         self.pms5003 = PMS5003()
+        self.gas = gas.read_all()
 
         self.font_size = 16
         self.font = ImageFont.truetype(UserFont, self.font_size)
 
         # Create LCD instance
-        disp = ST7735.ST7735(
+        self.disp = ST7735.ST7735(
             port=0, cs=1, dc=9, backlight=12, rotation=270, spi_speed_hz=10000000
         )
 
         # Initialize display
-        disp.begin()
+        self.disp.begin()
 
-        self.width = disp.width
-        self.height = disp.height
+        # Width and height to calculate text position
+        self.WIDTH = self.disp.width
+        self.HEIGHT = self.disp.height
 
         self.comp_factor = 2.25
 
@@ -46,16 +49,21 @@ class HardwareInterface:
         values["temperature"] = "{:.2f}".format(comp_temp)
         values["pressure"] = "{:.2f}".format(self.bme280.get_pressure() * 100)
         values["humidity"] = "{:.2f}".format(self.bme280.get_humidity())
+        values["oxidised"] = "{:.2f}".format(self.gas.oxidising / 1000)
+        values["reduced"] = "{:.2f}".format(self.gas.reducing / 1000)
+        values["nh3"] = "{:.2f}".format(self.gas.nh3 / 1000)
         try:
             pm_values = self.pms5003.read()
+            values["P1"] = str(pm_values.pm_ug_per_m3(1.0))
             values["P2"] = str(pm_values.pm_ug_per_m3(2.5))
-            values["P1"] = str(pm_values.pm_ug_per_m3(10))
+            values["P10"] = str(pm_values.pm_ug_per_m3(10))
         except (ReadTimeoutError, ChecksumMismatchError):
             logging.info("Failed to read PMS5003. Reseting and retrying.")
             self.pms5003.reset()
             pm_values = self.pms5003.read()
+            values["P1"] = str(pm_values.pm_ug_per_m3(1.0))
             values["P2"] = str(pm_values.pm_ug_per_m3(2.5))
-            values["P1"] = str(pm_values.pm_ug_per_m3(10))
+            values["P10"] = str(pm_values.pm_ug_per_m3(10))
         return values
 
     def display_status(self):

@@ -1,25 +1,16 @@
-from azure.iot.device import (
-    IoTHubSession,
-    MQTTConnectionDroppedError,
-    MQTTConnectionFailedError,
-)
+from azure.iot.device import IoTHubSession, MQTTConnectionFailedError, MQTTError
 import json
-import uuid
 import logging
+import asyncio
 
 
 class AzTransmitter:
     def __init__(self, connection_string):
-        print("Connecting to IoT Hub...")
-        try:
-            self.session = IoTHubSession.from_connection_string(connection_string)
-            print("Connection established.")
-        except MQTTConnectionFailedError:
-            logging.warning("Could not connect. Exiting...")
-            raise
+        self.connection_string = connection_string
 
-    async def send_to_azure(self, values, id):
+    async def send_to_azure(self, values):
         """Send data to Azure IoT Hub"""
+        print(values)
         pm_values = dict(i for i in values.items() if i[0].startswith("P"))
         temp_values = dict(i for i in values.items() if not i[0].startswith("P"))
 
@@ -32,13 +23,21 @@ class AzTransmitter:
 
         # Combine pm_values_json and temp_values_json
         data = pm_values_json + temp_values_json
+        json_data = json.dumps(data)
 
         try:
-            print("Sending data to IoT Hub...")
-            json_data = json.dumps(data)
-            await self.session.send_message(json_data)
-            print("Message sent.")
-            return True
-        except MQTTConnectionDroppedError:
-            logging.warning("Connection dropped. Exiting...")
-            return False
+            logging.info("Sending data to IoT Hub...")
+            async with IoTHubSession.from_connection_string(
+                self.connection_string
+            ) as session:
+                logging.info("Session created.")
+                await session.send_message(json_data)
+                logging.info("Message sent.")
+        except MQTTConnectionFailedError:
+            logging.error("Connection to IoT Hub failed.")
+        except MQTTError:
+            logging.error("An MQTT error occurred.")
+        except Exception as e:
+            logging.error(f"An unexpected exception occurred: {e}")
+        finally:
+            logging.info("Connection closed.")
