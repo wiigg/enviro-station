@@ -4,12 +4,12 @@ To regularly send sensor data to Azure, our program needs to be running consiste
 
 ## 📄 Step 1: Customise Service Template
 
-Open `sensor.service`:
+Open `sensor.service.template`:
 - Replace `<<PATH_TO_DEVICE_PROGRAM>>` with the full path to your `main.py`.
 - Replace `<<WORKING_DIRECTORY>>` with the directory where your `main.py` is located.
 - Replace `<<USER>>` with the username that will run the script.
 
-Then, save your changes in the `/etc/systemd/system/` directory.
+Then, rename the file to `sensor.service` and save your changes in the `/etc/systemd/system/` directory.
 
 ## 🔄 Step 2: Load & Enable the Sensor Service
 

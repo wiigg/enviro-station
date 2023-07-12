@@ -1,0 +1,11 @@
+{
+    "azureFunctions.templateFilter": "All",
+    "azureFunctions.deploySubpath": "functions/iot-data",
+    "azureFunctions.postDeployTask": "npm install (functions)",
+    "azureFunctions.projectLanguage": "JavaScript",
+    "azureFunctions.projectRuntime": "~4",
+    "debug.internalConsoleOptions": "neverOpen",
+    "azureFunctions.projectLanguageModel": 4,
+    "azureFunctions.projectSubpath": "functions/iot-data",
+    "azureFunctions.preDeployTask": "npm prune (functions)"
+}
