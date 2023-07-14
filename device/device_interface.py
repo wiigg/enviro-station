@@ -4,6 +4,7 @@ from bme280 import BME280
 from enviroplus import gas
 from PIL import Image, ImageDraw, ImageFont
 from fonts.ttf import RobotoMedium as UserFont
+import time
 
 try:
     from smbus2 import SMBus
@@ -47,6 +48,7 @@ class DeviceInterface:
         comp_temp = raw_temp - ((cpu_temp - raw_temp) / self.comp_factor)
 
         values = {
+            "timestamp": "{:.0f}".format(time.time()),
             "temperature": "{:.2f}".format(comp_temp),
             "pressure": "{:.2f}".format(self.bme280.get_pressure() * 100),
             "humidity": "{:.2f}".format(self.bme280.get_humidity()),

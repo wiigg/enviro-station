@@ -21,5 +21,4 @@ def check_wifi():
     """Check Wi-Fi for connection"""
     if check_output(["hostname", "-I"]):
         return True
-    else:
-        return False
+    return False

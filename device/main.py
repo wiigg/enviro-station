@@ -1,11 +1,13 @@
 # main.py
-from device_utilities import get_serial_number, check_wifi
-from device_interface import DeviceInterface
-from az_transmitter import AzTransmitter
-from dotenv import load_dotenv
 import os
 import logging
 import asyncio
+
+from dotenv import load_dotenv
+
+from az_transmitter import AzTransmitter
+from device_utilities import get_serial_number, check_wifi
+from device_interface import DeviceInterface
 
 # Constants
 UPDATE_INTERVAL = 0.5  # seconds
@@ -17,8 +19,10 @@ async def main():
     logging.basicConfig(level=logging.INFO)
 
     # Log Raspberry Pi serial and Wi-Fi status
-    logging.info("Raspberry Pi serial: {}".format(get_serial_number()))
-    logging.info("Wi-Fi: {}\n".format("connected" if check_wifi() else "disconnected"))
+    serial_number = get_serial_number()
+    wifi_status = "connected" if check_wifi() else "disconnected"
+    logging.info(f"Raspberry Pi serial: {serial_number}")
+    logging.info(f"Wi-Fi: {wifi_status}\n")
 
     # Initialise device interface and Azure transmitter
     device = DeviceInterface()
@@ -33,7 +37,7 @@ async def main():
             device.display_status()
             await asyncio.sleep(UPDATE_INTERVAL)
         except Exception as e:
-            logging.warning("Main exception: {}".format(e))
+            logging.warning(f"Main exception: {e}")
             break
 
 
