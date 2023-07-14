@@ -6,8 +6,8 @@ app.eventHub("es-iot-data", {
   cardinality: "many",
   return: output.generic({
     type: "signalR",
-    connectionStringSetting: "SignalRConnection",
-    hubName: "esiotdata",
+    connectionStringSetting: "AzureSignalRConnectionString",
+    hubName: "iotdata",
   }),
   handler: (messages, context) => {
     // Ensure messages is always an array
