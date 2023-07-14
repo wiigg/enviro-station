@@ -7,8 +7,9 @@
     "test": "echo \"No tests yet...\""
   },
   "dependencies": {
-    "@azure/functions": "^4.0.0-alpha.7"
+    "@azure/functions": "^4.0.0-alpha.7",
+    "mongoose": "^7.3.4"
   },
-  "devDependencies": {},
-  "main": "src/functions/*.js"
+  "main": "src/functions/es-iot-data.mjs",
+  "type": "module"
 }
