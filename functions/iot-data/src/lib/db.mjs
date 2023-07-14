@@ -17,9 +17,9 @@ const SensorSchema = new Schema(
     oxidised: Number,
     reduced: Number,
     nh3: Number,
-    p1: Number, 
-    p2: Number,
-    p10: Number,
+    pm1: Number, 
+    pm2: Number,
+    pm10: Number,
   },
   { timestamps: true }
 );

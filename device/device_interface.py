@@ -62,9 +62,9 @@ class DeviceInterface:
                 pm_values = self.pms5003.read()
                 values.update(
                     {
-                        "P1": str(pm_values.pm_ug_per_m3(1.0)),
-                        "P2": str(pm_values.pm_ug_per_m3(2.5)),
-                        "P10": str(pm_values.pm_ug_per_m3(10)),
+                        "pm1": str(pm_values.pm_ug_per_m3(1.0)),
+                        "pm2": str(pm_values.pm_ug_per_m3(2.5)),
+                        "pm10": str(pm_values.pm_ug_per_m3(10)),
                     }
                 )
                 break  # if no exception, break the loop

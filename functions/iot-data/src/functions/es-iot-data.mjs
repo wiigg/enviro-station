@@ -30,9 +30,9 @@ app.eventHub("es-iot-data", {
         oxidised: message.oxidised,
         reduced: message.reduced,
         nh3: message.nh3,
-        p1: message.P1,
-        p2: message.P2,
-        p10: message.P10,
+        pm1: message.pm1,
+        pm2: message.pm2,
+        pm10: message.pm10,
       });
 
       datapoint.save();  // fire and forget
