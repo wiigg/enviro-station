@@ -21,13 +21,13 @@ const getData = async () => {
   ]);
 };
 
-app.http("ai-insights", {
-  methods: ["GET", "POST"],
+app.http("insights", {
+  methods: ["GET"],
   authLevel: "anonymous",
   handler: async (request, context) => {
     context.log(`Http function processed request for url "${request.url}"`);
 
-    const style = request.query.style || "Friendly";
+    const style = request.query.get("style") || "Friendly";
 
     const data = await getData();
 
