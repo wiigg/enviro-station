@@ -1,6 +1,11 @@
 import Graph from "./Graph";
 import DataCard from "./DataCard";
 import { getLatestData, getPercentageChange } from "../utils/data";
+import tempicon from "../images/temperature.png";
+import humicon from "../images/humidity.png";
+import presicon from "../images/pressure.png";
+import pmicon from "../images/pm.png";
+import gasicon from "../images/gas.png";
 
 const Home = ({ messages }) => {
   const latestTemperature = getLatestData(messages, "temperature");
@@ -19,18 +24,21 @@ const Home = ({ messages }) => {
           data={latestTemperature}
           symbol={"°C"}
           change={temperatureChange}
+          icon={tempicon}
         />
         <DataCard
           title={"Humidity"}
           data={latestHumidity}
           symbol={"%"}
           change={humidityChange}
+          icon={humicon}
         />
         <DataCard
           title={"Pressure"}
           data={latestPressure}
           symbol={"hPa"}
           change={pressureChange}
+          icon={presicon}
         />
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 my-4">
@@ -39,12 +47,14 @@ const Home = ({ messages }) => {
           keys={["pm1", "pm25", "pm10"]}
           data={messages}
           symbol={"µg/m³"}
+          icon={pmicon}
         />
         <Graph
           title={"Gas"}
           keys={["nh3", "oxidised", "reduced"]}
           data={messages}
           symbol={"kΩ"}
+          icon={gasicon}
         />
       </div>
     </div>

@@ -11,7 +11,7 @@ import {
   Label,
 } from "recharts";
 
-const Graph = ({ title, keys, data, symbol }) => {
+const Graph = ({ title, keys, data, symbol, icon }) => {
   const lines = [
     { key: keys[0], colour: "#FF7F50" },
     { key: keys[1], colour: "#FDD835" },
@@ -47,10 +47,11 @@ const Graph = ({ title, keys, data, symbol }) => {
   };
 
   return (
-    <div className="w-full p-4 bg-gray-800 rounded-lg shadow-md overflow-hidden">
-      <h2 className="text-lg text-white mb-4 uppercase tracking-wider">
-        {title}
-      </h2>
+    <div className="w-full p-4 text-white bg-gray-800 rounded-lg shadow-md overflow-hidden">
+      <div className="flex items-center">
+        <img src={icon} alt="icon" className="h-6 mr-2 mb-4" />{" "}
+        <h2 className="text-lg mb-4 uppercase tracking-wider">{title}</h2>
+      </div>
       <ResponsiveContainer width="99%" height={400}>
         <LineChart
           data={data}

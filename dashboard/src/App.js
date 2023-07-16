@@ -45,7 +45,7 @@ const App = () => {
         <Route exact path="/" element={<Home messages={messages} />} />
         <Route path="/about" element={<About />} />
       </Routes>
-      <InsightButton setIsPanelOpen={setIsPanelOpen} text={"<< Insights"} />
+      <InsightButton setIsPanelOpen={setIsPanelOpen} text={"< Insights"} />
       <SidePanel isOpen={isPanelOpen} setIsOpen={setIsPanelOpen} />
     </>
   );
