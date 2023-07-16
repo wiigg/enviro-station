@@ -8,6 +8,7 @@ const DataCard = ({ title, data, symbol, change, icon }) => {
     changeClass = "text-green-400";
     changeIcon = upicon;
   } else if (change < 0) {
+    change = change * -1;  // negative change indicated by down arrow
     changeClass = "text-red-400";
     changeIcon = downicon;
   } else {

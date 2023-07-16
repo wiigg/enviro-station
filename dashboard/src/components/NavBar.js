@@ -2,14 +2,13 @@ import { Link } from "react-router-dom";
 
 import DateTime from "./DateTime";
 
-import logo from "../images/autumn-leaf.png";
+import logo from "../images/leaf.png";
 import github from "../images/github-icon.png";
 
 const NavBar = () => {
   return (
     <nav className="flex items-center justify-between bg-purple-600 p-6 text-white w-full">
       <div className="flex items-center">
-        
         <div className="flex flex-col ml-4">
           <div className="flex items-center">
           <img src={logo} alt="Logo" className="mt-1 mr-2 h-8" />
