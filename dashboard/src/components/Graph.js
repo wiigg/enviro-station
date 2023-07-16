@@ -68,6 +68,10 @@ const Graph = ({ title, keys, data, symbol, icon }) => {
             dataKey="timestamp"
             stroke="#d1d5db"
             tick={{ fill: "#d1d5db" }}
+            tickFormatter={(time) => {
+              const [hours, minutes] = time.split(":");
+              return `${hours}:${minutes}`;
+            }}
           />
           <YAxis
             stroke="#d1d5db"
