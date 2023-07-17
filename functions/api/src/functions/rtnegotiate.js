@@ -2,7 +2,7 @@ const { app, input } = require("@azure/functions");
 
 app.http("negotiate", {
   methods: ["POST"],
-  authLevel: "host",
+  authLevel: "anonymous",
   extraInputs: [
     input.generic({
       type: "signalRConnectionInfo",

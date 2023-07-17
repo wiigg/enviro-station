@@ -23,7 +23,7 @@ const getData = async () => {
 
 app.http("insights", {
   methods: ["GET"],
-  authLevel: "host",
+  authLevel: "anonymous",
   handler: async (request, context) => {
     context.log(`Http function processed request for url "${request.url}"`);
 
