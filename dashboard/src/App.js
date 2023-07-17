@@ -14,7 +14,7 @@ const App = () => {
   const [isPanelOpen, setIsPanelOpen] = useState(false);
 
   useEffect(() => {
-    const baseURL = process.env.REACT_APP_API;
+    const baseURL = process.env.REACT_APP_REALTIME_STREAM;
 
     const connection = new HubConnectionBuilder()
       .withUrl(`${baseURL}/api`)
