@@ -34,7 +34,6 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     environment:
-      name: 'Production'
       url: ${{ steps.deploy-to-webapp.outputs.webapp-url }}
 
     steps:
@@ -48,6 +47,5 @@ jobs:
         uses: azure/webapps-deploy@v2
         with:
           app-name: 'envirostation'
-          slot-name: 'Production'
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_2369E036040B40BF82883AF30F00B98D }}
           package: .
