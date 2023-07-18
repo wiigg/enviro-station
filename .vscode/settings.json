@@ -7,5 +7,11 @@
     "debug.internalConsoleOptions": "neverOpen",
     "azureFunctions.projectLanguageModel": 4,
     "azureFunctions.projectSubpath": "functions/iot-data",
-    "azureFunctions.preDeployTask": "npm prune (functions)"
+    "azureFunctions.preDeployTask": "npm prune (functions)",
+    "appService.zipIgnorePattern": [
+        "node_modules{,/**}",
+        ".vscode{,/**}"
+    ],
+    "appService.defaultWebAppToDeploy": "/subscriptions/a3ee783c-a158-4a2f-99e4-4fdfaf1a8075/resourceGroups/enviro-station/providers/Microsoft.Web/sites/envirostation",
+    "appService.deploySubpath": "dashboard"
 }

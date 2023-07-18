@@ -1,7 +1,7 @@
-const { app, input } = require("@azure/functions");
+import { app, input } from "@azure/functions";
 
 app.http("negotiate", {
-  methods: ["POST"],
+  methods: ["GET", "POST"],
   authLevel: "anonymous",
   extraInputs: [
     input.generic({
@@ -12,6 +12,7 @@ app.http("negotiate", {
     }),
   ],
   handler: async (request, context) => {
+    context.log("Negotiate request received");
     const connection = JSON.stringify(context.extraInputs.get("connectionInfo"));
     context.log("Connection info:", connection);
     return { body: connection }

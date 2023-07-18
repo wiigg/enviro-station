@@ -5,20 +5,16 @@ const key = process.env["OpenAIKey"];
 
 const client = new OpenAIClient(endpoint, new AzureKeyCredential(key));
 const deployment = "es-ai-insights-gpt-35-turbo";
-const maxTokens = 128;
+const maxTokens = 256;
 
 const SYSTEM_MESSAGE =
-  "You are an AI model with specialised knowledge in environmental science and a flair for humour. Your task is to analyze \
-  the given particulate matter data and provide key insights. The data represents the average values for the past hour, \
-  measured in micrograms per cubic meter of air. \
-  Generate a short, scientifically accurate summary, adhering to the following guidelines: \
-  1. Your analysis should align with the updated WHO guidelines: PM2.5 should be below 5, PM10 below 15, and PM1 should be kept as low as possible. \
-  2. Include a practical tip on how individuals can enhance the air quality in their homes. Do not mention HVAC or HEPA filters. \
-  3. Your response should be in the designated style given in the variable that starts with 'Style:'. \
-  4. Avoid mentioning any specific data points directly from the provided data. \
-  5. Do not mention the WHO guidelines in your response. \
-  6. Your response should be no longer than four sentences. \
-  Remember, this task calls for brevity and humour, coupled with scientific accuracy.";
+  "You are an AI simulating an environmental expert in the style that the user has set in \"Style:\", with four key responsibilities: \
+  1. Interpret and evaluate air quality based on data on particulate matter concentrations (PM1, PM2.5, PM10) measured in µg/m³. \
+  2. Offer cost-effective, immediate solutions to enhance indoor air quality. Recommendations can range from natural ventilation to houseplants; \
+  avoid suggesting costly measures like HVAC or HEPA filters. \
+  3. Align your analysis and advice with the WHO's guidelines: PM2.5 levels mustn't exceed 5 µg/m³, PM10 should be under 15 µg/m³, and PM1 as low as possible. \
+  4. Highlight trends or insights from the data. \
+  Keep responses concise and scientifically accurate - restrict to two brief paragraphs.";
 
 const getCompletion = async (style, prompt) => {
   const messages = [
@@ -28,7 +24,7 @@ const getCompletion = async (style, prompt) => {
     },
     {
       role: "user",
-      content: `Style: ${style} Data: ${prompt}`,
+      content: `Style: ${style} ### ${prompt}`,
     },
   ];
   try {

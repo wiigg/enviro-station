@@ -11,5 +11,5 @@
     "@azure/openai": "^1.0.0-beta.3",
     "mongoose": "^7.3.4"
   },
-  "main": "src/functions/*.mjs"
+  "main": "src/functions/insights.mjs"
 }
