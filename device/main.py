@@ -9,7 +9,6 @@ from az_transmitter import AzTransmitter
 from device_utilities import get_serial_number, check_wifi
 from device_interface import DeviceInterface
 
-# Constants
 UPDATE_INTERVAL = 1  # seconds
 
 

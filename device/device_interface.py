@@ -39,7 +39,7 @@ class DeviceInterface:
         self.WIDTH = self.disp.width
         self.HEIGHT = self.disp.height
 
-        self.comp_factor = 2.25
+        self.comp_factor = 1.95
 
     def read_values(self):
         """Read values from BME280 and PMS5003 and return as dict"""
