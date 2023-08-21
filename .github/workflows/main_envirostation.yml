@@ -18,6 +18,12 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    environment: 'Production'
+
+    env:
+      REACT_APP_INSIGHTS_API: ${{ vars.REACT_APP_INSIGHTS_API }}
+      REACT_APP_REALTIME_STREAM: ${{ vars.REACT_APP_REALTIME_STREAM }}
+
     steps:
       - uses: actions/checkout@v3
 
