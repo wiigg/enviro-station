@@ -8,7 +8,7 @@
   },
   "dependencies": {
     "@azure/functions": "^4.0.0-alpha.7",
-    "mongoose": "^7.3.4"
+    "mongoose": "^8.9.5"
   },
   "main": "src/functions/es-iot-data.mjs",
   "type": "module"
