@@ -43,6 +43,8 @@ class DeviceInterface:
 
     def read_values(self):
         """Read values from BME280 and PMS5003 and return as dict"""
+        # Refresh gas readings for each call to ensure up-to-date values
+        self.gas = gas.read_all()
         cpu_temp = get_cpu_temperature()
         raw_temp = self.bme280.get_temperature()
         comp_temp = raw_temp - ((cpu_temp - raw_temp) / self.comp_factor)
