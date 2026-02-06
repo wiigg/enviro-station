@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import tempfile
 import urllib.error
 import urllib.request
 
@@ -108,8 +109,24 @@ class BackendTransmitter:
         return []
 
     def _persist_pending(self):
+        directory = os.path.dirname(self.queue_file)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+
+        temp_path = None
         try:
-            with open(self.queue_file, "w", encoding="utf-8") as queue_handle:
+            file_descriptor, temp_path = tempfile.mkstemp(
+                prefix=".pending_readings_", suffix=".tmp", dir=directory or "."
+            )
+            with os.fdopen(file_descriptor, "w", encoding="utf-8") as queue_handle:
                 json.dump(self.pending, queue_handle)
+                queue_handle.flush()
+                os.fsync(queue_handle.fileno())
+            os.replace(temp_path, self.queue_file)
         except Exception as exc:
             logging.warning("Failed to persist pending queue: %s", exc)
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass

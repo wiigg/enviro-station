@@ -40,6 +40,7 @@ class DeviceInterface:
         self.HEIGHT = self.disp.height
 
         self.comp_factor = 1.65
+        self.last_pm_values = {"pm1": "0", "pm2": "0", "pm10": "0"}
 
     def read_values(self):
         """Read values from BME280 and PMS5003 and return as dict"""
@@ -58,21 +59,26 @@ class DeviceInterface:
             "reduced": "{:.2f}".format(self.gas.reducing / 1000),
             "nh3": "{:.2f}".format(self.gas.nh3 / 1000),
         }
+        values.update(self.last_pm_values)
 
         for _ in range(2):  # try twice
             try:
                 pm_values = self.pms5003.read()
-                values.update(
-                    {
-                        "pm1": str(pm_values.pm_ug_per_m3(1.0)),
-                        "pm2": str(pm_values.pm_ug_per_m3(2.5)),
-                        "pm10": str(pm_values.pm_ug_per_m3(10)),
-                    }
-                )
+                self.last_pm_values = {
+                    "pm1": str(pm_values.pm_ug_per_m3(1.0)),
+                    "pm2": str(pm_values.pm_ug_per_m3(2.5)),
+                    "pm10": str(pm_values.pm_ug_per_m3(10)),
+                }
+                values.update(self.last_pm_values)
                 break  # if no exception, break the loop
             except (ReadTimeoutError, ChecksumMismatchError):
                 logging.info("Failed to read PMS5003. Resetting and retrying.")
                 self.pms5003.reset()
+        else:
+            logging.warning(
+                "Using cached PM values after PMS5003 read failures: %s",
+                self.last_pm_values,
+            )
 
         return values
 
