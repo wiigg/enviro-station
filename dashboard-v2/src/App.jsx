@@ -92,6 +92,30 @@ function formatChartLabel(value) {
   });
 }
 
+function computeTemperatureDomain(readings) {
+  if (!readings.length) {
+    return [18, 26];
+  }
+
+  let min = readings[0].temperature;
+  let max = readings[0].temperature;
+
+  for (const reading of readings) {
+    if (reading.temperature < min) {
+      min = reading.temperature;
+    }
+    if (reading.temperature > max) {
+      max = reading.temperature;
+    }
+  }
+
+  const spread = Math.max(max - min, 1);
+  const padding = Math.max(0.6, spread * 0.25);
+  const lower = Math.floor((min - padding) * 10) / 10;
+  const upper = Math.ceil((max + padding) * 10) / 10;
+  return [lower, upper];
+}
+
 export default function App() {
   const backendBaseUrl = useMemo(() => resolveBackendBaseUrl(), []);
 
@@ -278,6 +302,10 @@ export default function App() {
       })),
     [visibleReadings]
   );
+  const temperatureDomain = useMemo(
+    () => computeTemperatureDomain(visibleReadings),
+    [visibleReadings]
+  );
 
   const axisTickFormatter = useCallback(
     (timestamp) => {
@@ -379,6 +407,7 @@ export default function App() {
                       tickLine={false}
                     />
                     <YAxis
+                      domain={temperatureDomain}
                       width={44}
                       tick={{ fill: "#5d6884", fontSize: 11 }}
                       axisLine={false}
