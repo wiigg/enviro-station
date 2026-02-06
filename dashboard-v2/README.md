@@ -1,13 +1,20 @@
 # Dashboard v2
 
-Phase 1 foundation for the Enviro Station dashboard rebuild.
+Phase 2 live integration for the Enviro Station dashboard rebuild.
 
 ## Scope
 
-- New visual system and layout
-- Mobile-ready shell
-- Static prototype sections for KPIs, trends, and operations feed
-- No live data wiring yet (Phase 2)
+- Modern visual system and mobile-ready layout
+- Backend history bootstrap from `GET /api/readings`
+- Realtime updates from `GET /api/stream` (SSE)
+- Connection state handling (`connecting`, `live`, `degraded`, `offline`)
+- KPI cards and trend charts driven by live backend data
+
+## Environment
+
+```bash
+VITE_BACKEND_URL=http://localhost:8080
+```
 
 ## Run
 
@@ -21,4 +28,3 @@ npm run dev
 ```bash
 npm run build
 ```
-

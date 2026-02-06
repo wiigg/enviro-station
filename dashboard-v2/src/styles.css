@@ -118,6 +118,27 @@ body {
   color: #fff;
 }
 
+.chipStatus {
+  color: #fff;
+  border-color: transparent;
+}
+
+.chipStatus.statusLive {
+  background: #2f9f7f;
+}
+
+.chipStatus.statusDegraded {
+  background: #f27a3e;
+}
+
+.chipStatus.statusOffline {
+  background: #d94848;
+}
+
+.chipStatus.statusConnecting {
+  background: #2f5dd0;
+}
+
 .controls {
   padding: 14px 16px;
   display: flex;
@@ -141,6 +162,7 @@ body {
   font-size: 0.88rem;
   font-weight: 600;
   color: var(--text);
+  cursor: pointer;
 }
 
 .btnActive {
@@ -153,6 +175,10 @@ body {
   margin: 0;
   color: var(--muted);
   font-size: 0.85rem;
+}
+
+.hintError {
+  color: #b74242;
 }
 
 .kpiGrid {
@@ -186,6 +212,14 @@ body {
 
 .dot.warn {
   background: var(--warn);
+}
+
+.dot.alert {
+  background: #d94848;
+}
+
+.dot.muted {
+  background: #9ca8c0;
 }
 
 .kpiValue {
@@ -240,6 +274,12 @@ body {
   width: 100%;
   height: 210px;
   display: block;
+}
+
+.emptyState {
+  margin: 24px 0 12px;
+  color: var(--muted);
+  font-size: 0.88rem;
 }
 
 .line {
@@ -344,4 +384,3 @@ body {
     grid-template-columns: 1fr;
   }
 }
-
