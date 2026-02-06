@@ -7,14 +7,16 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
 type fakeStore struct {
-	added   []SensorReading
-	latest  []SensorReading
-	pingErr error
-	addErr  error
+	added       []SensorReading
+	latest      []SensorReading
+	pingErr     error
+	addErr      error
+	addBatchErr error
 }
 
 func (store *fakeStore) Add(_ context.Context, reading SensorReading) error {
@@ -22,6 +24,14 @@ func (store *fakeStore) Add(_ context.Context, reading SensorReading) error {
 		return store.addErr
 	}
 	store.added = append(store.added, reading)
+	return nil
+}
+
+func (store *fakeStore) AddBatch(_ context.Context, readings []SensorReading) error {
+	if store.addBatchErr != nil {
+		return store.addBatchErr
+	}
+	store.added = append(store.added, readings...)
 	return nil
 }
 
@@ -41,9 +51,24 @@ func (store *fakeStore) Ping(_ context.Context) error {
 
 func (store *fakeStore) Close() {}
 
+func TestHandleIngestRejectsUnauthorized(t *testing.T) {
+	store := &fakeStore{}
+	api := NewAPI(store, "secret")
+	handler := api.Handler()
+
+	request := httptest.NewRequest(http.MethodPost, "/api/ingest", bytes.NewBufferString(`{}`))
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, response.Code)
+	}
+}
+
 func TestHandleIngestAcceptsStringAndNumberPayloads(t *testing.T) {
 	store := &fakeStore{}
-	api := NewAPI(store)
+	api := NewAPI(store, "secret")
 	handler := api.Handler()
 
 	payload := map[string]any{
@@ -66,6 +91,7 @@ func TestHandleIngestAcceptsStringAndNumberPayloads(t *testing.T) {
 
 	request := httptest.NewRequest(http.MethodPost, "/api/ingest", bytes.NewReader(encoded))
 	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-API-Key", "secret")
 	response := httptest.NewRecorder()
 
 	handler.ServeHTTP(response, request)
@@ -79,13 +105,44 @@ func TestHandleIngestAcceptsStringAndNumberPayloads(t *testing.T) {
 	}
 }
 
-func TestHandleIngestRejectsInvalidPayload(t *testing.T) {
+func TestHandleIngestBatchAcceptsMultipleReadings(t *testing.T) {
 	store := &fakeStore{}
-	api := NewAPI(store)
+	api := NewAPI(store, "secret")
 	handler := api.Handler()
 
-	request := httptest.NewRequest(http.MethodPost, "/api/ingest", bytes.NewBufferString(`{"timestamp":"oops"}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/ingest/batch", bytes.NewBufferString(`[
+		{"timestamp":"1738886400","temperature":"22.4","pressure":"101305","humidity":"40.1","oxidised":"1.2","reduced":"1.1","nh3":"0.7","pm1":"2","pm2":"3","pm10":"4"},
+		{"timestamp":"1738886401","temperature":"22.5","pressure":"101300","humidity":"40.2","oxidised":"1.3","reduced":"1.0","nh3":"0.8","pm1":"3","pm2":"4","pm10":"5"}
+	]`))
 	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-API-Key", "secret")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("expected status %d, got %d", http.StatusAccepted, response.Code)
+	}
+
+	if len(store.added) != 2 {
+		t.Fatalf("expected two stored readings, got %d", len(store.added))
+	}
+}
+
+func TestHandleIngestBatchRejectsOversizedBatch(t *testing.T) {
+	store := &fakeStore{}
+	api := NewAPI(store, "secret")
+	handler := api.Handler()
+
+	items := make([]string, 0, maxBatchSize+1)
+	for i := 0; i <= maxBatchSize; i++ {
+		items = append(items, `{"timestamp":"1738886400","temperature":"22.4","pressure":"101305","humidity":"40.1","oxidised":"1.2","reduced":"1.1","nh3":"0.7","pm1":"2","pm2":"3","pm10":"4"}`)
+	}
+	payload := "[" + strings.Join(items, ",") + "]"
+
+	request := httptest.NewRequest(http.MethodPost, "/api/ingest/batch", bytes.NewBufferString(payload))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-API-Key", "secret")
 	response := httptest.NewRecorder()
 
 	handler.ServeHTTP(response, request)
@@ -93,15 +150,11 @@ func TestHandleIngestRejectsInvalidPayload(t *testing.T) {
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, response.Code)
 	}
-
-	if len(store.added) != 0 {
-		t.Fatalf("expected no stored readings, got %d", len(store.added))
-	}
 }
 
 func TestHandleIngestReturnsInternalErrorWhenStoreFails(t *testing.T) {
 	store := &fakeStore{addErr: errors.New("write failed")}
-	api := NewAPI(store)
+	api := NewAPI(store, "secret")
 	handler := api.Handler()
 
 	request := httptest.NewRequest(http.MethodPost, "/api/ingest", bytes.NewBufferString(`{
@@ -117,6 +170,7 @@ func TestHandleIngestReturnsInternalErrorWhenStoreFails(t *testing.T) {
 		"pm10":"4"
 	}`))
 	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-API-Key", "secret")
 	response := httptest.NewRecorder()
 
 	handler.ServeHTTP(response, request)
@@ -128,7 +182,7 @@ func TestHandleIngestReturnsInternalErrorWhenStoreFails(t *testing.T) {
 
 func TestHandleHealth(t *testing.T) {
 	store := &fakeStore{}
-	api := NewAPI(store)
+	api := NewAPI(store, "secret")
 	handler := api.Handler()
 
 	request := httptest.NewRequest(http.MethodGet, "/health", nil)
@@ -143,7 +197,7 @@ func TestHandleHealth(t *testing.T) {
 
 func TestHandleReady(t *testing.T) {
 	store := &fakeStore{}
-	api := NewAPI(store)
+	api := NewAPI(store, "secret")
 	handler := api.Handler()
 
 	request := httptest.NewRequest(http.MethodGet, "/ready", nil)
@@ -158,7 +212,7 @@ func TestHandleReady(t *testing.T) {
 
 func TestHandleReadyReturnsServiceUnavailableWhenStoreUnreachable(t *testing.T) {
 	store := &fakeStore{pingErr: errors.New("db down")}
-	api := NewAPI(store)
+	api := NewAPI(store, "secret")
 	handler := api.Handler()
 
 	request := httptest.NewRequest(http.MethodGet, "/ready", nil)

@@ -20,6 +20,19 @@ type SensorReading struct {
 	PM10        float64 `json:"pm10"`
 }
 
+var allowedReadingKeys = map[string]struct{}{
+	"timestamp":   {},
+	"temperature": {},
+	"pressure":    {},
+	"humidity":    {},
+	"oxidised":    {},
+	"reduced":     {},
+	"nh3":         {},
+	"pm1":         {},
+	"pm2":         {},
+	"pm10":        {},
+}
+
 func DecodeReading(raw []byte) (SensorReading, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
@@ -27,6 +40,44 @@ func DecodeReading(raw []byte) (SensorReading, error) {
 	var payload map[string]any
 	if err := decoder.Decode(&payload); err != nil {
 		return SensorReading{}, err
+	}
+
+	return decodeReadingPayload(payload)
+}
+
+func DecodeReadingsBatch(raw []byte, maxBatchSize int) ([]SensorReading, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+
+	var payloads []map[string]any
+	if err := decoder.Decode(&payloads); err != nil {
+		return nil, err
+	}
+
+	if len(payloads) == 0 {
+		return nil, fmt.Errorf("batch must include at least one reading")
+	}
+	if len(payloads) > maxBatchSize {
+		return nil, fmt.Errorf("batch exceeds max size of %d", maxBatchSize)
+	}
+
+	readings := make([]SensorReading, 0, len(payloads))
+	for index, payload := range payloads {
+		reading, err := decodeReadingPayload(payload)
+		if err != nil {
+			return nil, fmt.Errorf("invalid reading at index %d: %w", index, err)
+		}
+		readings = append(readings, reading)
+	}
+
+	return readings, nil
+}
+
+func decodeReadingPayload(payload map[string]any) (SensorReading, error) {
+	for key := range payload {
+		if _, allowed := allowedReadingKeys[key]; !allowed {
+			return SensorReading{}, fmt.Errorf("unknown field: %s", key)
+		}
 	}
 
 	timestamp, err := parseInt64Field(payload, "timestamp")

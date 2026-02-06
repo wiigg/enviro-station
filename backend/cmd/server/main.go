@@ -14,6 +14,11 @@ import (
 
 func main() {
 	port := envOrDefault("PORT", "8080")
+	ingestAPIKey := strings.TrimSpace(os.Getenv("INGEST_API_KEY"))
+	if ingestAPIKey == "" {
+		log.Fatal("INGEST_API_KEY is required")
+	}
+
 	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
 	if databaseURL == "" {
 		log.Fatal("DATABASE_URL is required")
@@ -32,7 +37,7 @@ func main() {
 	}
 	defer store.Close()
 
-	api := server.NewAPI(store)
+	api := server.NewAPI(store, ingestAPIKey)
 
 	handler := withCORS(envOrDefault("CORS_ALLOW_ORIGIN", "*"), api.Handler())
 
@@ -55,7 +60,7 @@ func withCORS(allowedOrigin string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
 		response.Header().Set("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
-		response.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		response.Header().Set("Access-Control-Allow-Headers", "Content-Type,X-API-Key")
 
 		if request.Method == http.MethodOptions {
 			response.WriteHeader(http.StatusNoContent)
