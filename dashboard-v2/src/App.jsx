@@ -306,6 +306,25 @@ export default function App() {
     () => computeTemperatureDomain(visibleReadings),
     [visibleReadings]
   );
+  const latestReadingTimeLabel = useMemo(() => {
+    const latest = visibleReadings[visibleReadings.length - 1];
+    if (!latest) {
+      return "";
+    }
+
+    const date = new Date(latest.timestamp);
+    if (Number.isNaN(date.getTime())) {
+      return "";
+    }
+
+    return date.toLocaleString([], {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit"
+    });
+  }, [visibleReadings]);
 
   const axisTickFormatter = useCallback(
     (timestamp) => {
@@ -361,13 +380,9 @@ export default function App() {
               ? "Loading history..."
               : lastError
                 ? lastError
-                : connectionStatus === "live"
-                  ? "Realtime data active"
-                  : connectionStatus === "degraded"
-                    ? "Stream reconnecting..."
-                    : connectionStatus === "offline"
-                      ? "No recent stream updates"
-                      : "Connecting stream..."}
+                : latestReadingTimeLabel
+                  ? `Last reading ${latestReadingTimeLabel}`
+                  : "Waiting for first reading"}
           </p>
         </section>
 
@@ -407,7 +422,6 @@ export default function App() {
                       tickLine={false}
                     />
                     <YAxis
-                      domain={temperatureDomain}
                       width={44}
                       tick={{ fill: "#5d6884", fontSize: 11 }}
                       axisLine={false}
@@ -457,6 +471,7 @@ export default function App() {
                       tickLine={false}
                     />
                     <YAxis
+                      domain={temperatureDomain}
                       width={44}
                       tick={{ fill: "#5d6884", fontSize: 11 }}
                       axisLine={false}
