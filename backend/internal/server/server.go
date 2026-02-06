@@ -18,6 +18,7 @@ func NewAPI(store *Store) *API {
 func (api *API) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", api.handleHealth)
+	mux.HandleFunc("/ready", api.handleReady)
 	mux.HandleFunc("/api/ingest", api.handleIngest)
 	mux.HandleFunc("/api/readings", api.handleReadings)
 	return mux
@@ -32,6 +33,17 @@ func (api *API) handleHealth(response http.ResponseWriter, request *http.Request
 	writeJSON(response, http.StatusOK, map[string]any{
 		"status":  "ok",
 		"records": api.store.Count(),
+	})
+}
+
+func (api *API) handleReady(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		writeError(response, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	writeJSON(response, http.StatusOK, map[string]string{
+		"status": "ready",
 	})
 }
 

@@ -80,3 +80,18 @@ func TestHandleHealth(t *testing.T) {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, response.Code)
 	}
 }
+
+func TestHandleReady(t *testing.T) {
+	store := NewStore(100)
+	api := NewAPI(store)
+	handler := api.Handler()
+
+	request := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, response.Code)
+	}
+}

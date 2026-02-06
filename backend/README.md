@@ -6,6 +6,7 @@ Minimal Go service for ingesting Enviro Station sensor data.
 
 - `POST /api/ingest`
 - `GET /health`
+- `GET /ready`
 - `GET /api/readings?limit=100`
 
 ## Environment
