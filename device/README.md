@@ -1,49 +1,47 @@
-# Guide: Auto-start Sensor Service on Boot
+# Device Runtime
 
-To regularly send sensor data to Azure, our program needs to be running consistently. You can start it manually with `python main.py` each time, but a more efficient way is to set it up to start automatically at boot. Follow the steps below to set this up.
+The device service reads Enviro+ sensors and sends readings to the backend ingest API.
 
-## 📄 Step 1: Customise Service Template
+## Required Environment
 
-Open `sensor.service.template`:
-- Replace `<<PATH_TO_DEVICE_PROGRAM>>` with the full path to your `main.py`.
-- Replace `<<WORKING_DIRECTORY>>` with the directory where your `main.py` is located.
-- Replace `<<USER>>` with the username that will run the script.
+- `BACKEND_BASE_URL` (example: `http://localhost:8080`)
+- `INGEST_API_KEY` (must match backend `INGEST_API_KEY`)
 
-Then, rename the file to `sensor.service` and save your changes in the `/etc/systemd/system/` directory.
+## Optional Environment
 
-## 🔄 Step 2: Load & Enable the Sensor Service
+- `DEVICE_QUEUE_FILE` (default: `pending_readings.json`)
+- `DEVICE_BATCH_SIZE` (default: `100`)
+- `DEVICE_HTTP_TIMEOUT_SECONDS` (default: `5`)
+- `DEVICE_MAX_PENDING` (default: `5000`)
 
-Enable the service to run at boot:
+## Run
 
+```bash
+BACKEND_BASE_URL=http://localhost:8080 \
+INGEST_API_KEY=dev-ingest-key \
+python main.py
 ```
+
+If the backend is unavailable, readings are queued locally and retried in batches.
+
+## Auto-start on boot (systemd)
+
+1. Open `sensor.service.template`.
+2. Replace:
+- `<<PATH_TO_DEVICE_PROGRAM>>`
+- `<<WORKING_DIRECTORY>>`
+- `<<USER>>`
+3. Save as `/etc/systemd/system/sensor.service`.
+4. Enable and start:
+
+```bash
 sudo systemctl daemon-reload
 sudo systemctl enable sensor.service
-```
-
-## 🚀 Step 3: Start the Sensor Service
-
-Start the service immediately with:
-
-```
 sudo systemctl start sensor.service
 ```
 
-## 🔍 Step 4: Check the Status
+Check status:
 
-Check the status of the service with:
-
-```
+```bash
 sudo systemctl status sensor.service
 ```
-
-## 🔄 Step 5: Restart After Changes
-
-If you update `main.py` and want the changes to take effect, restart the service:
-
-```
-sudo systemctl restart sensor.service
-```
-
-That's it! `main.py` should now run on boot, sending sensor data to Azure. 🎉
-
-Note: Replace `sensor.service` with your service file's name if different.
