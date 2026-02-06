@@ -312,7 +312,6 @@ export default function App() {
             <span className={`chip chipStatus ${statusClassName(connectionStatus)}`}>
               {statusLabel(connectionStatus)}
             </span>
-            <span className="chip">{visibleReadings.length} points</span>
           </div>
         </header>
 
@@ -334,7 +333,13 @@ export default function App() {
               ? "Loading history..."
               : lastError
                 ? lastError
-                : `Connected to ${backendBaseUrl}`}
+                : connectionStatus === "live"
+                  ? "Realtime data active"
+                  : connectionStatus === "degraded"
+                    ? "Stream reconnecting..."
+                    : connectionStatus === "offline"
+                      ? "No recent stream updates"
+                      : "Connecting stream..."}
           </p>
         </section>
 
