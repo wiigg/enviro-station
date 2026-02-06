@@ -9,6 +9,7 @@ Phase 2 live integration for the Enviro Station dashboard rebuild.
 - Realtime updates from `GET /api/stream` (SSE)
 - Connection state handling (`connecting`, `live`, `degraded`, `offline`)
 - KPI cards and trend charts driven by live backend data
+- Recharts-powered time-series panels with tooltip and responsive scaling
 
 ## Environment
 

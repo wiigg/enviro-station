@@ -1,8 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  CartesianGrid,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis
+} from "recharts";
+import {
   appendReading,
   buildKpis,
-  getSeries,
   normalizeReading,
   normalizeReadings
 } from "./lib/readings";
@@ -33,30 +41,6 @@ function resolveBackendBaseUrl() {
   }
 
   return origin;
-}
-
-function pathFromSeries(series, width, height, inset) {
-  if (!series.length) {
-    return "";
-  }
-
-  if (series.length === 1) {
-    const centerY = height / 2;
-    return `M${inset},${centerY} L${width - inset},${centerY}`;
-  }
-
-  const min = Math.min(...series);
-  const max = Math.max(...series);
-  const range = Math.max(1, max - min);
-  const step = (width - inset * 2) / (series.length - 1);
-
-  return series
-    .map((value, index) => {
-      const x = inset + index * step;
-      const y = height - inset - ((value - min) / range) * (height - inset * 2);
-      return `${index === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`;
-    })
-    .join(" ");
 }
 
 function buildFeedItem(title, detail) {
@@ -92,6 +76,20 @@ function statusClassName(status) {
     return "statusOffline";
   }
   return "statusConnecting";
+}
+
+function formatChartLabel(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  return date.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  });
 }
 
 export default function App() {
@@ -271,14 +269,30 @@ export default function App() {
 
   const kpis = useMemo(() => buildKpis(visibleReadings), [visibleReadings]);
 
-  const series = useMemo(() => getSeries(visibleReadings), [visibleReadings]);
-  const particulatePath = useMemo(
-    () => pathFromSeries(series.particulate, 560, 190, 14),
-    [series.particulate]
+  const chartData = useMemo(
+    () =>
+      visibleReadings.map((reading) => ({
+        timestamp: reading.timestamp,
+        pm2: reading.pm2,
+        temperature: reading.temperature
+      })),
+    [visibleReadings]
   );
-  const comfortPath = useMemo(
-    () => pathFromSeries(series.comfort, 560, 190, 14),
-    [series.comfort]
+
+  const axisTickFormatter = useCallback(
+    (timestamp) => {
+      const date = new Date(timestamp);
+      if (Number.isNaN(date.getTime())) {
+        return "";
+      }
+
+      if (windowId === "7d") {
+        return date.toLocaleDateString([], { month: "short", day: "numeric" });
+      }
+
+      return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    },
+    [windowId]
   );
 
   return (
@@ -290,7 +304,7 @@ export default function App() {
             <p className="eyebrow">Enviro Station</p>
             <h1>Air Quality Control Deck</h1>
             <p className="subtitle">
-              Phase 2 enables live backend integration via history bootstrap and SSE stream.
+              Phase 3 upgrades charts to a production-ready time-series engine.
             </p>
           </div>
           <div className="topbarMeta">
@@ -346,15 +360,45 @@ export default function App() {
               <h2>Particulate Trend</h2>
               <span>PM2.5 over selected window</span>
             </div>
-            {series.particulate.length ? (
-              <svg
-                viewBox="0 0 560 190"
-                className="chart"
-                role="img"
-                aria-label="Particulate trend chart"
-              >
-                <path d={particulatePath} className="line lineHot" />
-              </svg>
+            {chartData.length ? (
+              <div className="chart" role="img" aria-label="Particulate trend chart">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={chartData} margin={{ top: 8, right: 12, left: 0, bottom: 6 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(24, 35, 65, 0.12)" />
+                    <XAxis
+                      dataKey="timestamp"
+                      tickFormatter={axisTickFormatter}
+                      minTickGap={26}
+                      tick={{ fill: "#5d6884", fontSize: 11 }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      width={44}
+                      tick={{ fill: "#5d6884", fontSize: 11 }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <Tooltip
+                      labelFormatter={formatChartLabel}
+                      formatter={(value) => [`${Number(value).toFixed(1)} ug/m3`, "PM2.5"]}
+                      contentStyle={{
+                        borderRadius: "12px",
+                        border: "1px solid rgba(24, 35, 65, 0.12)",
+                        background: "rgba(255,255,255,0.96)"
+                      }}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="pm2"
+                      stroke="#f27a3e"
+                      strokeWidth={3}
+                      dot={false}
+                      isAnimationActive={false}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
             ) : (
               <p className="emptyState">No data in selected window yet.</p>
             )}
@@ -365,15 +409,45 @@ export default function App() {
               <h2>Comfort Trend</h2>
               <span>Temperature over selected window</span>
             </div>
-            {series.comfort.length ? (
-              <svg
-                viewBox="0 0 560 190"
-                className="chart"
-                role="img"
-                aria-label="Comfort trend chart"
-              >
-                <path d={comfortPath} className="line lineCool" />
-              </svg>
+            {chartData.length ? (
+              <div className="chart" role="img" aria-label="Comfort trend chart">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={chartData} margin={{ top: 8, right: 12, left: 0, bottom: 6 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(24, 35, 65, 0.12)" />
+                    <XAxis
+                      dataKey="timestamp"
+                      tickFormatter={axisTickFormatter}
+                      minTickGap={26}
+                      tick={{ fill: "#5d6884", fontSize: 11 }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      width={44}
+                      tick={{ fill: "#5d6884", fontSize: 11 }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <Tooltip
+                      labelFormatter={formatChartLabel}
+                      formatter={(value) => [`${Number(value).toFixed(1)} C`, "Temperature"]}
+                      contentStyle={{
+                        borderRadius: "12px",
+                        border: "1px solid rgba(24, 35, 65, 0.12)",
+                        background: "rgba(255,255,255,0.96)"
+                      }}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="temperature"
+                      stroke="#1f8a78"
+                      strokeWidth={3}
+                      dot={false}
+                      isAnimationActive={false}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
             ) : (
               <p className="emptyState">No data in selected window yet.</p>
             )}
