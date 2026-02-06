@@ -332,7 +332,6 @@ export default function App() {
             <h1>Air Quality Control Deck</h1>
           </div>
           <div className="topbarMeta">
-            <span className="chip chipPrimary">v2 Live</span>
             <span className={`chip chipStatus ${statusClassName(connectionStatus)}`}>
               {statusLabel(connectionStatus)}
             </span>

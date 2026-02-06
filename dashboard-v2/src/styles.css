@@ -112,12 +112,6 @@ body {
   font-family: "IBM Plex Mono", monospace;
 }
 
-.chipPrimary {
-  background: #1f8a78;
-  border-color: transparent;
-  color: #fff;
-}
-
 .chipStatus {
   color: #fff;
   border-color: transparent;
