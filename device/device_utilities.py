@@ -19,6 +19,7 @@ def get_serial_number():
 
 def check_wifi():
     """Check Wi-Fi for connection"""
-    if check_output(["hostname", "-I"]):
-        return True
-    return False
+    try:
+        return bool(check_output(["hostname", "-I"]).strip())
+    except Exception:
+        return False

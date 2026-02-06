@@ -48,9 +48,12 @@ def main():
             transmitter.send(values)
             device.display_status()
             time.sleep(UPDATE_INTERVAL)
+        except KeyboardInterrupt:
+            logging.info("Shutting down device loop.")
+            break
         except Exception as e:
             logging.warning(f"Main exception: {e}")
-            break
+            time.sleep(UPDATE_INTERVAL)
 
 
 if __name__ == "__main__":
