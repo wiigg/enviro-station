@@ -306,26 +306,6 @@ export default function App() {
     () => computeTemperatureDomain(visibleReadings),
     [visibleReadings]
   );
-  const latestReadingTimeLabel = useMemo(() => {
-    const latest = visibleReadings[visibleReadings.length - 1];
-    if (!latest) {
-      return "";
-    }
-
-    const date = new Date(latest.timestamp);
-    if (Number.isNaN(date.getTime())) {
-      return "";
-    }
-
-    return date.toLocaleString([], {
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit"
-    });
-  }, [visibleReadings]);
-
   const axisTickFormatter = useCallback(
     (timestamp) => {
       const date = new Date(timestamp);
@@ -350,9 +330,6 @@ export default function App() {
           <div>
             <p className="eyebrow">Enviro Station</p>
             <h1>Air Quality Control Deck</h1>
-            <p className="subtitle">
-              Phase 3 upgrades charts to a production-ready time-series engine.
-            </p>
           </div>
           <div className="topbarMeta">
             <span className="chip chipPrimary">v2 Live</span>
@@ -375,15 +352,6 @@ export default function App() {
               </button>
             ))}
           </div>
-          <p className={`hint ${lastError ? "hintError" : ""}`}>
-            {isLoading
-              ? "Loading history..."
-              : lastError
-                ? lastError
-                : latestReadingTimeLabel
-                  ? `Last reading ${latestReadingTimeLabel}`
-                  : "Waiting for first reading"}
-          </p>
         </section>
 
         <section className="kpiGrid reveal">
