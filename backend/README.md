@@ -59,6 +59,23 @@ curl -X POST http://localhost:8080/api/ingest/batch \
   ]'
 ```
 
+## Device simulator (dev)
+
+Generate synthetic readings and post them to ingest:
+
+```bash
+go run ./cmd/simulator \
+  -url http://localhost:8080/api/ingest \
+  -api-key dev-ingest-key \
+  -interval 2s
+```
+
+Useful flags:
+
+- `-count 120` to emit a fixed number of readings then exit
+- `-seed 42` to replay deterministic synthetic data
+- `-jitter 1s` to vary send timing and mimic real device cadence
+
 ## Docker
 
 ```bash
