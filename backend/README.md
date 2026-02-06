@@ -54,3 +54,22 @@ docker run --rm -p 8080:8080 \
   -e DATABASE_URL='postgres://postgres:postgres@host.docker.internal:5432/envirostation?sslmode=disable' \
   enviro-ingest
 ```
+
+## Docker Compose (backend + postgres)
+
+From the `backend` directory:
+
+```bash
+docker compose up --build
+```
+
+This starts:
+
+- Postgres on `localhost:5432`
+- Backend on `http://localhost:8080`
+
+The backend uses this internal DSN:
+
+```text
+postgres://envirostation:envirostation@postgres:5432/envirostation?sslmode=disable
+```
