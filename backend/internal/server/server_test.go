@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -41,8 +42,12 @@ func TestHandleIngestAcceptsStringAndNumberPayloads(t *testing.T) {
 		t.Fatalf("expected status %d, got %d", http.StatusAccepted, response.Code)
 	}
 
-	if store.Count() != 1 {
-		t.Fatalf("expected one reading, got %d", store.Count())
+	count, err := store.Count(context.Background())
+	if err != nil {
+		t.Fatalf("count readings: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected one reading, got %d", count)
 	}
 }
 
@@ -61,8 +66,12 @@ func TestHandleIngestRejectsInvalidPayload(t *testing.T) {
 		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, response.Code)
 	}
 
-	if store.Count() != 0 {
-		t.Fatalf("expected zero readings, got %d", store.Count())
+	count, err := store.Count(context.Background())
+	if err != nil {
+		t.Fatalf("count readings: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected zero readings, got %d", count)
 	}
 }
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
@@ -13,9 +14,24 @@ import (
 
 func main() {
 	port := envOrDefault("PORT", "8080")
-	maxReadings := intOrDefault("MAX_READINGS", 10000)
+	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	if databaseURL == "" {
+		log.Fatal("DATABASE_URL is required")
+	}
 
-	store := server.NewStore(maxReadings)
+	setupCtx, cancelSetup := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelSetup()
+
+	store, err := server.NewPostgresStore(
+		setupCtx,
+		databaseURL,
+		int32(intOrDefault("PG_MAX_CONNS", 10)),
+	)
+	if err != nil {
+		log.Fatalf("create postgres store: %v", err)
+	}
+	defer store.Close()
+
 	api := server.NewAPI(store)
 
 	handler := withCORS(envOrDefault("CORS_ALLOW_ORIGIN", "*"), api.Handler())
@@ -30,7 +46,7 @@ func main() {
 	}
 
 	log.Printf("ingest service listening on :%s", port)
-	if err := httpServer.ListenAndServe(); err != nil {
+	if err = httpServer.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
 }

@@ -1,25 +1,36 @@
 package server
 
-import "sync"
+import (
+	"context"
+	"sync"
+)
 
-type Store struct {
+type Store interface {
+	Add(ctx context.Context, reading SensorReading) error
+	Count(ctx context.Context) (int, error)
+	Latest(ctx context.Context, limit int) ([]SensorReading, error)
+	Ping(ctx context.Context) error
+	Close()
+}
+
+type MemoryStore struct {
 	mu          sync.RWMutex
 	maxReadings int
 	readings    []SensorReading
 }
 
-func NewStore(maxReadings int) *Store {
+func NewStore(maxReadings int) *MemoryStore {
 	if maxReadings <= 0 {
 		maxReadings = 10000
 	}
 
-	return &Store{
+	return &MemoryStore{
 		maxReadings: maxReadings,
 		readings:    make([]SensorReading, 0, maxReadings),
 	}
 }
 
-func (store *Store) Add(reading SensorReading) {
+func (store *MemoryStore) Add(_ context.Context, reading SensorReading) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 
@@ -27,15 +38,17 @@ func (store *Store) Add(reading SensorReading) {
 	if len(store.readings) > store.maxReadings {
 		store.readings = append([]SensorReading(nil), store.readings[len(store.readings)-store.maxReadings:]...)
 	}
+
+	return nil
 }
 
-func (store *Store) Count() int {
+func (store *MemoryStore) Count(_ context.Context) (int, error) {
 	store.mu.RLock()
 	defer store.mu.RUnlock()
-	return len(store.readings)
+	return len(store.readings), nil
 }
 
-func (store *Store) Latest(limit int) []SensorReading {
+func (store *MemoryStore) Latest(_ context.Context, limit int) ([]SensorReading, error) {
 	store.mu.RLock()
 	defer store.mu.RUnlock()
 
@@ -46,5 +59,13 @@ func (store *Store) Latest(limit int) []SensorReading {
 	start := len(store.readings) - limit
 	output := make([]SensorReading, limit)
 	copy(output, store.readings[start:])
-	return output
+	return output, nil
 }
+
+func (store *MemoryStore) Ping(_ context.Context) error {
+	return nil
+}
+
+func (store *MemoryStore) Close() {}
+
+var _ Store = (*MemoryStore)(nil)

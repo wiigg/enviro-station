@@ -8,10 +8,10 @@ import (
 )
 
 type API struct {
-	store *Store
+	store Store
 }
 
-func NewAPI(store *Store) *API {
+func NewAPI(store Store) *API {
 	return &API{store: store}
 }
 
@@ -30,15 +30,26 @@ func (api *API) handleHealth(response http.ResponseWriter, request *http.Request
 		return
 	}
 
+	records, err := api.store.Count(request.Context())
+	if err != nil {
+		writeError(response, http.StatusServiceUnavailable, "store unavailable")
+		return
+	}
+
 	writeJSON(response, http.StatusOK, map[string]any{
 		"status":  "ok",
-		"records": api.store.Count(),
+		"records": records,
 	})
 }
 
 func (api *API) handleReady(response http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodGet {
 		writeError(response, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	if err := api.store.Ping(request.Context()); err != nil {
+		writeError(response, http.StatusServiceUnavailable, "not ready")
 		return
 	}
 
@@ -66,11 +77,20 @@ func (api *API) handleIngest(response http.ResponseWriter, request *http.Request
 		return
 	}
 
-	api.store.Add(reading)
+	if err := api.store.Add(request.Context(), reading); err != nil {
+		writeError(response, http.StatusInternalServerError, "failed to persist reading")
+		return
+	}
+
+	records, err := api.store.Count(request.Context())
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "failed to fetch reading count")
+		return
+	}
 
 	writeJSON(response, http.StatusAccepted, map[string]any{
 		"status":  "accepted",
-		"records": api.store.Count(),
+		"records": records,
 	})
 }
 
@@ -90,9 +110,13 @@ func (api *API) handleReadings(response http.ResponseWriter, request *http.Reque
 		limit = parsedLimit
 	}
 
-	writeJSON(response, http.StatusOK, map[string]any{
-		"readings": api.store.Latest(limit),
-	})
+	readings, err := api.store.Latest(request.Context(), limit)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "failed to read data")
+		return
+	}
+
+	writeJSON(response, http.StatusOK, map[string]any{"readings": readings})
 }
 
 func writeJSON(response http.ResponseWriter, statusCode int, payload any) {
