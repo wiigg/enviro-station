@@ -30,16 +30,7 @@ func (api *API) handleHealth(response http.ResponseWriter, request *http.Request
 		return
 	}
 
-	records, err := api.store.Count(request.Context())
-	if err != nil {
-		writeError(response, http.StatusServiceUnavailable, "store unavailable")
-		return
-	}
-
-	writeJSON(response, http.StatusOK, map[string]any{
-		"status":  "ok",
-		"records": records,
-	})
+	writeJSON(response, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (api *API) handleReady(response http.ResponseWriter, request *http.Request) {
@@ -53,9 +44,7 @@ func (api *API) handleReady(response http.ResponseWriter, request *http.Request)
 		return
 	}
 
-	writeJSON(response, http.StatusOK, map[string]string{
-		"status": "ready",
-	})
+	writeJSON(response, http.StatusOK, map[string]string{"status": "ready"})
 }
 
 func (api *API) handleIngest(response http.ResponseWriter, request *http.Request) {
@@ -82,16 +71,7 @@ func (api *API) handleIngest(response http.ResponseWriter, request *http.Request
 		return
 	}
 
-	records, err := api.store.Count(request.Context())
-	if err != nil {
-		writeError(response, http.StatusInternalServerError, "failed to fetch reading count")
-		return
-	}
-
-	writeJSON(response, http.StatusAccepted, map[string]any{
-		"status":  "accepted",
-		"records": records,
-	})
+	writeJSON(response, http.StatusAccepted, map[string]string{"status": "accepted"})
 }
 
 func (api *API) handleReadings(response http.ResponseWriter, request *http.Request) {

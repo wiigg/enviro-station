@@ -75,29 +75,18 @@ INSERT INTO sensor_readings (
 	_, err := store.pool.Exec(
 		ctx,
 		query,
-		reading.Timestamp.Int64(),
-		reading.Temperature.Float64(),
-		reading.Pressure.Float64(),
-		reading.Humidity.Float64(),
-		reading.Oxidised.Float64(),
-		reading.Reduced.Float64(),
-		reading.Nh3.Float64(),
-		reading.PM1.Float64(),
-		reading.PM2.Float64(),
-		reading.PM10.Float64(),
+		reading.Timestamp,
+		reading.Temperature,
+		reading.Pressure,
+		reading.Humidity,
+		reading.Oxidised,
+		reading.Reduced,
+		reading.Nh3,
+		reading.PM1,
+		reading.PM2,
+		reading.PM10,
 	)
 	return err
-}
-
-func (store *PostgresStore) Count(ctx context.Context) (int, error) {
-	const query = `SELECT COUNT(*) FROM sensor_readings`
-
-	var count int
-	if err := store.pool.QueryRow(ctx, query).Scan(&count); err != nil {
-		return 0, err
-	}
-
-	return count, nil
 }
 
 func (store *PostgresStore) Latest(ctx context.Context, limit int) ([]SensorReading, error) {
@@ -121,34 +110,20 @@ LIMIT $1
 	readings := make([]SensorReading, 0, limit)
 	for rows.Next() {
 		var reading SensorReading
-		var timestamp int64
-		var temperature, pressure, humidity, oxidised, reduced, nh3, pm1, pm2, pm10 float64
-
 		if err := rows.Scan(
-			&timestamp,
-			&temperature,
-			&pressure,
-			&humidity,
-			&oxidised,
-			&reduced,
-			&nh3,
-			&pm1,
-			&pm2,
-			&pm10,
+			&reading.Timestamp,
+			&reading.Temperature,
+			&reading.Pressure,
+			&reading.Humidity,
+			&reading.Oxidised,
+			&reading.Reduced,
+			&reading.Nh3,
+			&reading.PM1,
+			&reading.PM2,
+			&reading.PM10,
 		); err != nil {
 			return nil, err
 		}
-
-		reading.Timestamp = FlexibleInt64(timestamp)
-		reading.Temperature = FlexibleFloat(temperature)
-		reading.Pressure = FlexibleFloat(pressure)
-		reading.Humidity = FlexibleFloat(humidity)
-		reading.Oxidised = FlexibleFloat(oxidised)
-		reading.Reduced = FlexibleFloat(reduced)
-		reading.Nh3 = FlexibleFloat(nh3)
-		reading.PM1 = FlexibleFloat(pm1)
-		reading.PM2 = FlexibleFloat(pm2)
-		reading.PM10 = FlexibleFloat(pm10)
 		readings = append(readings, reading)
 	}
 
