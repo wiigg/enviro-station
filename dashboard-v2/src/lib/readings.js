@@ -11,6 +11,9 @@ const NUMERIC_FIELDS = [
   "pm10"
 ];
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+const YESTERDAY_TOLERANCE_MS = 2 * 60 * 60 * 1000;
+
 export function normalizeReading(raw) {
   if (!raw || typeof raw !== "object") {
     return null;
@@ -66,28 +69,28 @@ export function buildKpis(readings) {
       label: "PM2.5",
       value: latest.pm2.toFixed(1),
       unit: "ug/m3",
-      trend: trendText(latest.pm2, average(samples.map((item) => item.pm2))),
+      trend: metricTrend(readings, samples, latest, "pm2", "ug/m3", 1),
       state: severityForPM25(latest.pm2)
     },
     {
       label: "PM10",
       value: latest.pm10.toFixed(1),
       unit: "ug/m3",
-      trend: trendText(latest.pm10, average(samples.map((item) => item.pm10))),
+      trend: metricTrend(readings, samples, latest, "pm10", "ug/m3", 1),
       state: severityForPM10(latest.pm10)
     },
     {
       label: "Temp",
       value: latest.temperature.toFixed(1),
       unit: "C",
-      trend: trendText(latest.temperature, average(samples.map((item) => item.temperature))),
+      trend: metricTrend(readings, samples, latest, "temperature", "C", 1),
       state: "ok"
     },
     {
       label: "Humidity",
       value: latest.humidity.toFixed(0),
       unit: "%",
-      trend: trendText(latest.humidity, average(samples.map((item) => item.humidity))),
+      trend: metricTrend(readings, samples, latest, "humidity", "%", 0),
       state: "ok"
     }
   ];
@@ -107,14 +110,65 @@ function average(values) {
   return values.reduce((total, value) => total + value, 0) / values.length;
 }
 
-function trendText(latest, baseline) {
-  if (!baseline) {
-    return "No baseline yet";
+function metricTrend(readings, samples, latest, field, unit, decimals) {
+  const yesterdayReading = findClosestReading(
+    readings,
+    latest.timestamp - DAY_MS,
+    YESTERDAY_TOLERANCE_MS
+  );
+
+  if (yesterdayReading) {
+    return describeDelta(
+      latest[field] - yesterdayReading[field],
+      unit,
+      decimals,
+      "this time yesterday"
+    );
   }
 
-  const delta = ((latest - baseline) / baseline) * 100;
-  const sign = delta >= 0 ? "+" : "";
-  return `${sign}${delta.toFixed(1)}% vs 30-sample avg`;
+  const baseline = average(samples.map((item) => item[field]));
+  if (!Number.isFinite(baseline)) {
+    return "Waiting for baseline";
+  }
+
+  return describeDelta(latest[field] - baseline, unit, decimals, "recent average");
+}
+
+function findClosestReading(readings, targetTimestamp, maxDistanceMs) {
+  if (!readings.length) {
+    return null;
+  }
+
+  let closest = null;
+  let closestDistance = Number.POSITIVE_INFINITY;
+
+  for (const reading of readings) {
+    const distance = Math.abs(reading.timestamp - targetTimestamp);
+    if (distance < closestDistance) {
+      closest = reading;
+      closestDistance = distance;
+    }
+  }
+
+  if (closestDistance > maxDistanceMs) {
+    return null;
+  }
+
+  return closest;
+}
+
+function describeDelta(delta, unit, decimals, referenceLabel) {
+  const threshold = decimals === 0 ? 1 : 0.1;
+  if (Math.abs(delta) < threshold) {
+    return `About the same as ${referenceLabel}`;
+  }
+
+  const magnitude = Math.abs(delta).toFixed(decimals);
+  if (delta > 0) {
+    return `${magnitude} ${unit} above ${referenceLabel}`;
+  }
+
+  return `${magnitude} ${unit} below ${referenceLabel}`;
 }
 
 function severityForPM25(value) {
