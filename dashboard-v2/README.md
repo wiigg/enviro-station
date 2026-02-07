@@ -21,7 +21,11 @@ VITE_BACKEND_URL=https://api.example.com
 
 If omitted in non-local deployments, the dashboard uses the current origin as backend base URL.
 For local Vite dev (`localhost:5173`), it automatically targets `http://localhost:8080`.
-For local development in this repo, `.env.local` is provided with localhost defaults.
+For local development, create `.env.local` from the example:
+
+```bash
+cp .env.local.example .env.local
+```
 
 ## Run
 

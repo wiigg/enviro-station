@@ -48,7 +48,7 @@ func main() {
 		insightsBaseURL := envOrDefault("OPENAI_BASE_URL", "https://api.openai.com/v1")
 		insightsMax := intOrDefault("OPENAI_INSIGHTS_MAX", 4)
 		insightsCacheSeconds := intOrDefault("OPENAI_INSIGHTS_CACHE_SECONDS", 30)
-		if insightsCacheSeconds < 0 {
+		if insightsCacheSeconds < 30 {
 			insightsCacheSeconds = 30
 		}
 

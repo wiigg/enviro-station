@@ -18,11 +18,11 @@ The device service reads Enviro+ sensors and sends readings to the backend inges
 
 ```bash
 cd device
+cp .env.local.example .env.local
 python main.py
 ```
 
 `main.py` loads `.env` and then `.env.local` (with `.env.local` overriding).
-This repo includes a localhost-ready `.env.local` for local development.
 
 If the backend is unavailable, readings are queued locally and retried in batches.
 

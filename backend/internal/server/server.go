@@ -21,6 +21,7 @@ type API struct {
 	ingestAPIKey  string
 	stream        *streamHub
 	alertAnalyzer AlertAnalyzer
+	insightsRate  *requestLimiter
 }
 
 type APIOption func(*API)
@@ -32,7 +33,12 @@ func WithAlertAnalyzer(analyzer AlertAnalyzer) APIOption {
 }
 
 func NewAPI(store Store, ingestAPIKey string, options ...APIOption) *API {
-	api := &API{store: store, ingestAPIKey: ingestAPIKey, stream: newStreamHub()}
+	api := &API{
+		store:        store,
+		ingestAPIKey: ingestAPIKey,
+		stream:       newStreamHub(),
+		insightsRate: newRequestLimiter(30, time.Minute),
+	}
 	for _, option := range options {
 		option(api)
 	}
@@ -222,6 +228,11 @@ func (api *API) handleInsights(response http.ResponseWriter, request *http.Reque
 
 	if api.alertAnalyzer == nil {
 		writeError(response, http.StatusServiceUnavailable, "insights analyzer is not configured")
+		return
+	}
+
+	if !api.insightsRate.Allow(clientIdentity(request), time.Now()) {
+		writeError(response, http.StatusTooManyRequests, "insights rate limit exceeded")
 		return
 	}
 

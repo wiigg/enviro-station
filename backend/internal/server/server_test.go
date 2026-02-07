@@ -349,3 +349,37 @@ func TestHandleAlertsReturnsBadGatewayWhenAnalyzerFails(t *testing.T) {
 		t.Fatalf("expected status %d, got %d", http.StatusBadGateway, response.Code)
 	}
 }
+
+func TestHandleInsightsRateLimit(t *testing.T) {
+	store := &fakeStore{
+		latest: []SensorReading{
+			{Timestamp: 1738886400000, PM2: 8.2, PM10: 14.7, Temperature: 22.1, Humidity: 47},
+		},
+	}
+	analyzer := &fakeAlertAnalyzer{
+		source: "openai",
+		alerts: []Alert{
+			{Kind: "tip", Severity: "info", Title: "Ventilation tip", Message: "Open windows for 10 minutes."},
+		},
+	}
+	api := NewAPI(store, "secret", WithAlertAnalyzer(analyzer))
+	handler := api.Handler()
+
+	for index := 0; index < 30; index++ {
+		request := httptest.NewRequest(http.MethodGet, "/api/insights", nil)
+		request.RemoteAddr = "203.0.113.2:5050"
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("expected status %d for request %d, got %d", http.StatusOK, index+1, response.Code)
+		}
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/api/insights", nil)
+	request.RemoteAddr = "203.0.113.2:5050"
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected status %d, got %d", http.StatusTooManyRequests, response.Code)
+	}
+}

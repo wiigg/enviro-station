@@ -28,7 +28,6 @@ type AlertAnalyzer interface {
 type cachedAlertAnalyzer struct {
 	next      AlertAnalyzer
 	ttl       time.Duration
-	lastKey   string
 	lastAt    time.Time
 	lastValue []Alert
 	mu        sync.Mutex
@@ -50,46 +49,24 @@ func (analyzer *cachedAlertAnalyzer) Analyze(
 		return analyzer.next.Analyze(ctx, readings)
 	}
 
-	cacheKey := readingCacheKey(readings)
 	now := time.Now()
 
 	analyzer.mu.Lock()
-	if analyzer.lastKey == cacheKey && now.Sub(analyzer.lastAt) < analyzer.ttl {
+	defer analyzer.mu.Unlock()
+
+	if now.Sub(analyzer.lastAt) < analyzer.ttl {
 		cached := cloneAlerts(analyzer.lastValue)
-		analyzer.mu.Unlock()
 		return cached, nil
 	}
-	analyzer.mu.Unlock()
 
 	alerts, err := analyzer.next.Analyze(ctx, readings)
 	if err != nil {
 		return nil, err
 	}
 
-	analyzer.mu.Lock()
-	analyzer.lastKey = cacheKey
 	analyzer.lastAt = now
 	analyzer.lastValue = cloneAlerts(alerts)
-	analyzer.mu.Unlock()
-
 	return alerts, nil
-}
-
-func readingCacheKey(readings []SensorReading) string {
-	if len(readings) == 0 {
-		return "empty"
-	}
-
-	latest := readings[len(readings)-1]
-	return fmt.Sprintf(
-		"%d:%d:%.1f:%.1f:%.1f:%.1f",
-		len(readings),
-		latest.Timestamp,
-		latest.PM2,
-		latest.PM10,
-		latest.Temperature,
-		latest.Humidity,
-	)
 }
 
 func cloneAlerts(alerts []Alert) []Alert {

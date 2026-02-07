@@ -23,12 +23,13 @@ Minimal Go service for Enviro Station ingestion, streaming, and recent reads.
 - `OPENAI_INSIGHTS_MODEL` (default: `gpt-5-mini`)
 - `OPENAI_BASE_URL` (default: `https://api.openai.com/v1`)
 - `OPENAI_INSIGHTS_MAX` (default: `4`)
-- `OPENAI_INSIGHTS_CACHE_SECONDS` (default: `30`)
+- `OPENAI_INSIGHTS_CACHE_SECONDS` (default/minimum: `30`)
 
 ## Run locally
 
 ```bash
 cd backend
+cp .env.local.example .env.local
 go run ./cmd/server
 ```
 
@@ -129,6 +130,7 @@ The backend runs DB migrations from `internal/server/migrations/` on startup.
 
 When `OPENAI_API_KEY` is set, `/api/insights` analyzes recent readings and returns
 actionable insights (alerts, trend insights, and tips) with severity (`critical`, `warn`, `info`).
+Insights responses are rate-limited per client and model calls are cached to reduce abuse/cost.
 
 Example:
 
