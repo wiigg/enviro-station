@@ -8,6 +8,7 @@ Minimal Go service for Enviro Station ingestion, streaming, and recent reads.
 - `POST /api/ingest/batch` (requires `X-API-Key`)
 - `GET /api/stream` (SSE realtime stream)
 - `GET /api/readings?limit=100`
+- `GET /api/insights?analysis_limit=360&limit=4` (AI-generated insights)
 - `GET /health`
 - `GET /ready`
 
@@ -18,6 +19,11 @@ Minimal Go service for Enviro Station ingestion, streaming, and recent reads.
 - `INGEST_API_KEY` (required)
 - `DATABASE_URL` (required, standard Postgres DSN)
 - `PG_MAX_CONNS` (default: `10`)
+- `OPENAI_API_KEY` (optional, enables `/api/insights`)
+- `OPENAI_INSIGHTS_MODEL` (default: `gpt-5-mini`)
+- `OPENAI_BASE_URL` (default: `https://api.openai.com/v1`)
+- `OPENAI_INSIGHTS_MAX` (default: `4`)
+- `OPENAI_INSIGHTS_CACHE_SECONDS` (default: `30`)
 
 ## Run locally
 
@@ -100,3 +106,14 @@ This starts:
 - Backend on `http://localhost:8080`
 
 The backend runs DB migrations from `internal/server/migrations/` on startup.
+
+## AI insights endpoint
+
+When `OPENAI_API_KEY` is set, `/api/insights` analyzes recent readings and returns
+actionable insights (alerts, trend insights, and tips) with severity (`critical`, `warn`, `info`).
+
+Example:
+
+```bash
+curl "http://localhost:8080/api/insights?analysis_limit=720&limit=4"
+```

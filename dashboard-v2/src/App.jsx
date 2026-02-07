@@ -24,6 +24,8 @@ const WINDOW_OPTIONS = [
   { id: "7d", label: "7d", limit: 10000 }
 ];
 
+const INSIGHT_POLL_INTERVAL_MS = 30000;
+
 function resolveBackendBaseUrl() {
   const env = import.meta.env.VITE_BACKEND_URL;
   if (env) {
@@ -54,7 +56,7 @@ function buildFeedItem(title, detail) {
 
 function statusLabel(status) {
   if (status === "live") {
-    return "Stream Live";
+    return "Connected";
   }
   if (status === "degraded") {
     return "Reconnecting";
@@ -116,14 +118,76 @@ function computeTemperatureDomain(readings) {
   return [lower, upper];
 }
 
+function normalizeInsight(rawInsight) {
+  if (!rawInsight || typeof rawInsight !== "object") {
+    return null;
+  }
+
+  const title = typeof rawInsight.title === "string" ? rawInsight.title.trim() : "";
+  const message = typeof rawInsight.message === "string" ? rawInsight.message.trim() : "";
+  const severityRaw = typeof rawInsight.severity === "string" ? rawInsight.severity.trim() : "";
+  const kindRaw = typeof rawInsight.kind === "string" ? rawInsight.kind.trim() : "";
+  const severity = severityRaw.toLowerCase();
+  const kind = kindRaw.toLowerCase();
+  const normalizedSeverity =
+    severity === "critical" || severity === "warn" || severity === "info" ? severity : "info";
+  const normalizedKind = kind === "alert" || kind === "insight" || kind === "tip" ? kind : "insight";
+
+  if (!title || !message) {
+    return null;
+  }
+
+  return {
+    id: `${normalizedKind}-${normalizedSeverity}-${title}-${message}`.toLowerCase(),
+    title,
+    message,
+    severity: normalizedSeverity,
+    kind: normalizedKind
+  };
+}
+
+function insightSeverityClassName(severity) {
+  if (severity === "critical") {
+    return "insightSeverityCritical";
+  }
+  if (severity === "warn") {
+    return "insightSeverityWarn";
+  }
+  return "insightSeverityInfo";
+}
+
+function insightSeverityLabel(severity) {
+  if (severity === "critical") {
+    return "Critical";
+  }
+  if (severity === "warn") {
+    return "Warn";
+  }
+  return "Info";
+}
+
+function insightKindLabel(kind) {
+  if (kind === "alert") {
+    return "Alert";
+  }
+  if (kind === "tip") {
+    return "Tip";
+  }
+  return "Insight";
+}
+
 export default function App() {
   const backendBaseUrl = useMemo(() => resolveBackendBaseUrl(), []);
 
   const [windowId, setWindowId] = useState("live");
   const [readings, setReadings] = useState([]);
   const [connectionStatus, setConnectionStatus] = useState("connecting");
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [lastError, setLastError] = useState("");
+  const [insights, setInsights] = useState([]);
+  const [insightsError, setInsightsError] = useState("");
+  const [isLoadingInsights, setIsLoadingInsights] = useState(true);
+  const [insightSource, setInsightSource] = useState("openai");
   const [feedItems, setFeedItems] = useState([
     buildFeedItem("Dashboard started", "Waiting for backend history and realtime stream")
   ]);
@@ -135,7 +199,6 @@ export default function App() {
     () => WINDOW_OPTIONS.find((windowOption) => windowOption.id === windowId) ?? WINDOW_OPTIONS[0],
     [windowId]
   );
-
   const addFeedItem = useCallback((title, detail) => {
     setFeedItems((previousItems) => [buildFeedItem(title, detail), ...previousItems].slice(0, 8));
   }, []);
@@ -144,7 +207,7 @@ export default function App() {
     const abortController = new AbortController();
 
     async function loadHistory() {
-      setIsLoading(true);
+      setIsLoadingHistory(true);
 
       try {
         const historyUrl = `${backendBaseUrl}/api/readings?limit=${selectedWindow.limit}`;
@@ -181,7 +244,7 @@ export default function App() {
         addFeedItem("History load failed", message);
       } finally {
         if (!abortController.signal.aborted) {
-          setIsLoading(false);
+          setIsLoadingHistory(false);
         }
       }
     }
@@ -283,6 +346,73 @@ export default function App() {
       clearInterval(timer);
     };
   }, []);
+
+  useEffect(() => {
+    let closed = false;
+    let timer = null;
+    const abortController = new AbortController();
+
+    async function loadInsights() {
+      try {
+        const insightsUrl = `${backendBaseUrl}/api/insights?analysis_limit=${selectedWindow.limit}&limit=4`;
+        const response = await fetch(insightsUrl, { signal: abortController.signal });
+
+        const payloadText = await response.text();
+        let payload = {};
+        if (payloadText) {
+          try {
+            payload = JSON.parse(payloadText);
+          } catch (_error) {
+            throw new Error("insights endpoint returned non-JSON");
+          }
+        }
+
+        if (!response.ok) {
+          const errorMessage =
+            typeof payload.error === "string"
+              ? payload.error
+              : `insights request failed with status ${response.status}`;
+          if (errorMessage.includes("not configured")) {
+            throw new Error("AI insights are disabled (set OPENAI_API_KEY on backend)");
+          }
+          throw new Error(errorMessage);
+        }
+
+        if (closed) {
+          return;
+        }
+
+        const sourceData = Array.isArray(payload.insights) ? payload.insights : [];
+
+        const nextInsights = sourceData.map(normalizeInsight).filter(Boolean);
+
+        setInsights(nextInsights);
+        setInsightSource(typeof payload.source === "string" ? payload.source : "openai");
+        setInsightsError("");
+      } catch (error) {
+        if (closed || abortController.signal.aborted) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : "failed to load insights";
+        setInsightsError(message);
+      } finally {
+        if (!closed) {
+          setIsLoadingInsights(false);
+          timer = window.setTimeout(loadInsights, INSIGHT_POLL_INTERVAL_MS);
+        }
+      }
+    }
+
+    loadInsights();
+
+    return () => {
+      closed = true;
+      abortController.abort();
+      if (timer) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, [backendBaseUrl, selectedWindow.limit]);
 
   const visibleReadings = useMemo(() => {
     if (readings.length <= selectedWindow.limit) {
@@ -469,23 +599,59 @@ export default function App() {
             )}
           </article>
 
-          <aside className="card panel feed">
-            <div className="panelHead">
-              <h2>Ops Feed</h2>
-              <span>History + stream events</span>
-            </div>
-            <ul>
-              {feedItems.map((incident) => (
-                <li key={incident.id}>
-                  <p className="time">{incident.time}</p>
-                  <div>
-                    <p className="event">{incident.title}</p>
-                    <p className="detail">{incident.detail}</p>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </aside>
+          <div className="sideStack">
+            <aside className="card panel insightsPanel">
+              <div className="panelHead">
+                <h2>AI Insights</h2>
+                <span>{insightSource}</span>
+              </div>
+              {isLoadingInsights || isLoadingHistory ? (
+                <p className="emptyState">Analyzing latest readings...</p>
+              ) : insightsError ? (
+                <p className="emptyState alertError">{insightsError}</p>
+              ) : insights.length ? (
+                <ul className="insightList">
+                  {insights.map((insight) => (
+                    <li key={insight.id} className="insightItem">
+                      <div className="insightMeta">
+                        <p className="insightKind">{insightKindLabel(insight.kind)}</p>
+                        <p className={`insightSeverity ${insightSeverityClassName(insight.severity)}`}>
+                          {insightSeverityLabel(insight.severity)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="insightTitle">{insight.title}</p>
+                        <p className="insightMessage">{insight.message}</p>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="emptyState">
+                  No active insights for the selected window.
+                  {lastError ? ` Data warning: ${lastError}` : ""}
+                </p>
+              )}
+            </aside>
+
+            <aside className="card panel feed">
+              <div className="panelHead">
+                <h2>Ops Feed</h2>
+                <span>History + stream events</span>
+              </div>
+              <ul>
+                {feedItems.map((incident) => (
+                  <li key={incident.id}>
+                    <p className="time">{incident.time}</p>
+                    <div>
+                      <p className="event">{incident.title}</p>
+                      <p className="detail">{incident.detail}</p>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </aside>
+          </div>
         </section>
       </main>
     </div>

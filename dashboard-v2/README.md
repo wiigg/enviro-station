@@ -7,7 +7,9 @@ Phase 2 live integration for the Enviro Station dashboard rebuild.
 - Modern visual system and mobile-ready layout
 - Backend history bootstrap from `GET /api/readings`
 - Realtime updates from `GET /api/stream` (SSE)
+- AI insights from `GET /api/insights`
 - Connection state handling (`connecting`, `live`, `degraded`, `offline`)
+- Ops feed panel for history + stream lifecycle events
 - KPI cards and trend charts driven by live backend data
 - Recharts-powered time-series panels with tooltip and responsive scaling
 

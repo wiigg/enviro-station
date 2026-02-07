@@ -17,13 +17,26 @@ const (
 )
 
 type API struct {
-	store        Store
-	ingestAPIKey string
-	stream       *streamHub
+	store         Store
+	ingestAPIKey  string
+	stream        *streamHub
+	alertAnalyzer AlertAnalyzer
 }
 
-func NewAPI(store Store, ingestAPIKey string) *API {
-	return &API{store: store, ingestAPIKey: ingestAPIKey, stream: newStreamHub()}
+type APIOption func(*API)
+
+func WithAlertAnalyzer(analyzer AlertAnalyzer) APIOption {
+	return func(api *API) {
+		api.alertAnalyzer = analyzer
+	}
+}
+
+func NewAPI(store Store, ingestAPIKey string, options ...APIOption) *API {
+	api := &API{store: store, ingestAPIKey: ingestAPIKey, stream: newStreamHub()}
+	for _, option := range options {
+		option(api)
+	}
+	return api
 }
 
 func (api *API) Handler() http.Handler {
@@ -34,6 +47,7 @@ func (api *API) Handler() http.Handler {
 	mux.HandleFunc("/api/ingest/batch", api.handleIngestBatch)
 	mux.HandleFunc("/api/readings", api.handleReadings)
 	mux.HandleFunc("/api/stream", api.handleStream)
+	mux.HandleFunc("/api/insights", api.handleInsights)
 	return mux
 }
 
@@ -198,6 +212,61 @@ func (api *API) handleStream(response http.ResponseWriter, request *http.Request
 			flusher.Flush()
 		}
 	}
+}
+
+func (api *API) handleInsights(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		writeError(response, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	if api.alertAnalyzer == nil {
+		writeError(response, http.StatusServiceUnavailable, "insights analyzer is not configured")
+		return
+	}
+
+	analysisLimit := 360
+	if rawAnalysisLimit := request.URL.Query().Get("analysis_limit"); rawAnalysisLimit != "" {
+		parsedAnalysisLimit, err := strconv.Atoi(rawAnalysisLimit)
+		if err != nil || parsedAnalysisLimit < 30 || parsedAnalysisLimit > 5000 {
+			writeError(response, http.StatusBadRequest, "analysis_limit must be between 30 and 5000")
+			return
+		}
+		analysisLimit = parsedAnalysisLimit
+	}
+
+	alertLimit := 4
+	if rawLimit := request.URL.Query().Get("limit"); rawLimit != "" {
+		parsedLimit, err := strconv.Atoi(rawLimit)
+		if err != nil || parsedLimit < 1 || parsedLimit > 20 {
+			writeError(response, http.StatusBadRequest, "limit must be between 1 and 20")
+			return
+		}
+		alertLimit = parsedLimit
+	}
+
+	readings, err := api.store.Latest(request.Context(), analysisLimit)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "failed to read data")
+		return
+	}
+
+	alerts, err := api.alertAnalyzer.Analyze(request.Context(), readings)
+	if err != nil {
+		writeError(response, http.StatusBadGateway, "failed to analyze insights")
+		return
+	}
+
+	if len(alerts) > alertLimit {
+		alerts = alerts[:alertLimit]
+	}
+
+	writeJSON(response, http.StatusOK, map[string]any{
+		"insights":         alerts,
+		"source":           api.alertAnalyzer.Source(),
+		"generated_at":     time.Now().UnixMilli(),
+		"analyzed_samples": len(readings),
+	})
 }
 
 func (api *API) authorizeIngestRequest(response http.ResponseWriter, request *http.Request) bool {

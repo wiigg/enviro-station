@@ -165,16 +165,6 @@ body {
   border-color: transparent;
 }
 
-.hint {
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.85rem;
-}
-
-.hintError {
-  color: #b74242;
-}
-
 .kpiGrid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -236,8 +226,18 @@ body {
 
 .dataGrid {
   display: grid;
-  grid-template-columns: 1fr 1fr 0.95fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+  align-items: start;
+}
+
+.sideStack {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  align-content: start;
+  align-items: start;
+  grid-column: 1 / -1;
 }
 
 .panel {
@@ -291,8 +291,72 @@ body {
   stroke: var(--accent-cool);
 }
 
-.feed {
-  grid-row: span 2;
+.insightList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.insightItem {
+  border-top: 1px dashed var(--border);
+  padding-top: 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.insightMeta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.insightKind {
+  margin: 0;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-strong);
+  padding: 4px 8px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.insightSeverity {
+  margin: 0;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+
+.insightSeverityCritical {
+  color: #c03f3f;
+}
+
+.insightSeverityWarn {
+  color: #c67522;
+}
+
+.insightSeverityInfo {
+  color: #2f5dd0;
+}
+
+.insightTitle {
+  margin: 0;
+  font-weight: 700;
+  font-size: 0.92rem;
+}
+
+.insightMessage {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
 }
 
 .feed ul {
@@ -331,6 +395,10 @@ body {
   line-height: 1.45;
 }
 
+.alertError {
+  color: #b74242;
+}
+
 @keyframes rise {
   from {
     opacity: 0;
@@ -351,8 +419,8 @@ body {
     grid-template-columns: 1fr;
   }
 
-  .feed {
-    grid-row: auto;
+  .sideStack {
+    grid-template-columns: 1fr;
   }
 }
 

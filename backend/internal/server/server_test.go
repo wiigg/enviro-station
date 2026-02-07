@@ -14,6 +14,7 @@ import (
 type fakeStore struct {
 	added       []SensorReading
 	latest      []SensorReading
+	latestErr   error
 	pingErr     error
 	addErr      error
 	addBatchErr error
@@ -36,6 +37,10 @@ func (store *fakeStore) AddBatch(_ context.Context, readings []SensorReading) er
 }
 
 func (store *fakeStore) Latest(_ context.Context, limit int) ([]SensorReading, error) {
+	if store.latestErr != nil {
+		return nil, store.latestErr
+	}
+
 	if limit <= 0 || limit > len(store.latest) {
 		limit = len(store.latest)
 	}
@@ -50,6 +55,30 @@ func (store *fakeStore) Ping(_ context.Context) error {
 }
 
 func (store *fakeStore) Close() {}
+
+type fakeAlertAnalyzer struct {
+	alerts []Alert
+	err    error
+	source string
+	calls  int
+}
+
+func (analyzer *fakeAlertAnalyzer) Analyze(_ context.Context, _ []SensorReading) ([]Alert, error) {
+	analyzer.calls++
+	if analyzer.err != nil {
+		return nil, analyzer.err
+	}
+	output := make([]Alert, len(analyzer.alerts))
+	copy(output, analyzer.alerts)
+	return output, nil
+}
+
+func (analyzer *fakeAlertAnalyzer) Source() string {
+	if analyzer.source == "" {
+		return "test"
+	}
+	return analyzer.source
+}
 
 func TestHandleIngestRejectsUnauthorized(t *testing.T) {
 	store := &fakeStore{}
@@ -222,5 +251,101 @@ func TestHandleReadyReturnsServiceUnavailableWhenStoreUnreachable(t *testing.T) 
 
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected status %d, got %d", http.StatusServiceUnavailable, response.Code)
+	}
+}
+
+func TestHandleAlertsReturnsServiceUnavailableWithoutAnalyzer(t *testing.T) {
+	store := &fakeStore{}
+	api := NewAPI(store, "secret")
+	handler := api.Handler()
+
+	request := httptest.NewRequest(http.MethodGet, "/api/insights", nil)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status %d, got %d", http.StatusServiceUnavailable, response.Code)
+	}
+}
+
+func TestHandleAlertsReturnsAnalyzedAlerts(t *testing.T) {
+	store := &fakeStore{
+		latest: []SensorReading{
+			{Timestamp: 1738886400000, PM2: 3.2, PM10: 5.7, Temperature: 21.4, Humidity: 45},
+			{Timestamp: 1738886460000, PM2: 14.8, PM10: 22.1, Temperature: 24.2, Humidity: 58},
+		},
+	}
+	analyzer := &fakeAlertAnalyzer{
+		source: "openai",
+		alerts: []Alert{
+			{
+				Kind:     "alert",
+				Severity: "warn",
+				Title:    "PM2.5 rising",
+				Message:  "PM2.5 is elevated compared with baseline.",
+			},
+			{
+				Kind:     "insight",
+				Severity: "info",
+				Title:    "Humidity climbing",
+				Message:  "Humidity is trending up over the last hour.",
+			},
+		},
+	}
+	api := NewAPI(store, "secret", WithAlertAnalyzer(analyzer))
+	handler := api.Handler()
+
+	request := httptest.NewRequest(http.MethodGet, "/api/insights?analysis_limit=100&limit=1", nil)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, response.Code)
+	}
+	if analyzer.calls != 1 {
+		t.Fatalf("expected analyzer to be called once, got %d", analyzer.calls)
+	}
+
+	var payload struct {
+		Insights []Alert `json:"insights"`
+		Source   string  `json:"source"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+
+	if payload.Source != "openai" {
+		t.Fatalf("expected source openai, got %q", payload.Source)
+	}
+	if len(payload.Insights) != 1 {
+		t.Fatalf("expected exactly one insight, got %d", len(payload.Insights))
+	}
+	if payload.Insights[0].Severity != "warn" {
+		t.Fatalf("expected warn severity, got %q", payload.Insights[0].Severity)
+	}
+	if payload.Insights[0].Kind != "alert" {
+		t.Fatalf("expected alert kind, got %q", payload.Insights[0].Kind)
+	}
+}
+
+func TestHandleAlertsReturnsBadGatewayWhenAnalyzerFails(t *testing.T) {
+	store := &fakeStore{
+		latest: []SensorReading{
+			{Timestamp: 1738886400000, PM2: 3.2, PM10: 5.7, Temperature: 21.4, Humidity: 45},
+		},
+	}
+	analyzer := &fakeAlertAnalyzer{err: errors.New("analyzer unavailable")}
+	api := NewAPI(store, "secret", WithAlertAnalyzer(analyzer))
+	handler := api.Handler()
+
+	request := httptest.NewRequest(http.MethodGet, "/api/insights", nil)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadGateway {
+		t.Fatalf("expected status %d, got %d", http.StatusBadGateway, response.Code)
 	}
 }

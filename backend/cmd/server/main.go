@@ -37,7 +37,28 @@ func main() {
 	}
 	defer store.Close()
 
-	api := server.NewAPI(store, ingestAPIKey)
+	options := make([]server.APIOption, 0, 1)
+	openAIAPIKey := strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
+	if openAIAPIKey != "" {
+		insightsModel := envOrDefault("OPENAI_INSIGHTS_MODEL", "gpt-5-mini")
+		insightsBaseURL := envOrDefault("OPENAI_BASE_URL", "https://api.openai.com/v1")
+		insightsMax := intOrDefault("OPENAI_INSIGHTS_MAX", 4)
+		insightsCacheSeconds := intOrDefault("OPENAI_INSIGHTS_CACHE_SECONDS", 30)
+		if insightsCacheSeconds < 0 {
+			insightsCacheSeconds = 30
+		}
+
+		alertAnalyzer := server.NewCachedAlertAnalyzer(
+			server.NewOpenAIAlertAnalyzer(openAIAPIKey, insightsModel, insightsBaseURL, insightsMax),
+			time.Duration(insightsCacheSeconds)*time.Second,
+		)
+		options = append(options, server.WithAlertAnalyzer(alertAnalyzer))
+		log.Printf("ai insights enabled model=%s", insightsModel)
+	} else {
+		log.Printf("ai insights disabled (set OPENAI_API_KEY to enable)")
+	}
+
+	api := server.NewAPI(store, ingestAPIKey, options...)
 
 	handler := withCORS(envOrDefault("CORS_ALLOW_ORIGIN", "*"), api.Handler())
 
