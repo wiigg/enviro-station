@@ -1,0 +1,17 @@
+[project]
+name = "envirostation-device"
+version = "0.1.0"
+description = "Enviro Station edge device runtime"
+requires-python = ">=3.10"
+dependencies = [
+  "python-dotenv>=1.0.1",
+  "pillow>=10.0.0",
+  "smbus2>=0.4.3",
+  "st7735>=0.0.4",
+  "pms5003>=0.0.5",
+  "bme280>=0.7",
+  "enviroplus>=0.0.4",
+]
+
+[tool.uv]
+package = false

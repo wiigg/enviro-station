@@ -19,7 +19,8 @@ The device service reads Enviro+ sensors and sends readings to the backend inges
 ```bash
 cd device
 cp .env.local.example .env.local
-python main.py
+uv sync
+uv run main.py
 ```
 
 `main.py` loads `.env` and then `.env.local` (with `.env.local` overriding).
@@ -34,7 +35,8 @@ If the backend is unavailable, readings are queued locally and retried in batche
 - `<<WORKING_DIRECTORY>>`
 - `<<USER>>`
 3. Save as `/etc/systemd/system/sensor.service`.
-4. Enable and start:
+4. Ensure dependencies are installed with `uv sync` in the working directory.
+5. Enable and start:
 
 ```bash
 sudo systemctl daemon-reload

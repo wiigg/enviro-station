@@ -2,7 +2,7 @@
 Description=Enviro Station
 
 [Service]
-ExecStart=/usr/bin/python3 <<PATH_TO_DEVICE_PROGRAM>>
+ExecStart=/usr/bin/env uv run <<PATH_TO_DEVICE_PROGRAM>>
 WorkingDirectory=<<WORKING_DIRECTORY>>
 StandardOutput=inherit
 StandardError=inherit
