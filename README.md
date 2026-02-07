@@ -46,10 +46,11 @@ npm run dev
 ### Device Runtime
 
 ```bash
+sudo apt update && sudo apt install -y python3-enviroplus python3-pil python3-dotenv
+
 cd device
 cp .env.local.example .env.local
-uv sync
-uv run main.py
+python3 main.py
 ```
 
 ## Cloud Deployment Checklist

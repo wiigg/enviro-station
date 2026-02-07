@@ -17,10 +17,12 @@ The device service reads Enviro+ sensors and sends readings to the backend inges
 ## Run
 
 ```bash
+sudo apt update
+sudo apt install -y python3-enviroplus python3-pil python3-dotenv
+
 cd device
 cp .env.local.example .env.local
-uv sync
-uv run main.py
+python3 main.py
 ```
 
 `main.py` loads `.env` and then `.env.local` (with `.env.local` overriding).
@@ -35,7 +37,7 @@ If the backend is unavailable, readings are queued locally and retried in batche
 - `<<WORKING_DIRECTORY>>`
 - `<<USER>>`
 3. Save as `/etc/systemd/system/sensor.service`.
-4. Ensure dependencies are installed with `uv sync` in the working directory.
+4. Ensure dependencies are installed (apt-first recommended above).
 5. Enable and start:
 
 ```bash
