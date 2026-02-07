@@ -2,12 +2,12 @@
 
 Enviro Station is an end-to-end air quality monitoring platform.
 
-It collects environmental readings from edge devices, persists them in PostgreSQL, and provides a backend API for realtime and historical access.
+It collects environmental readings from edge devices, persists them in PostgreSQL, and exposes authenticated APIs for realtime and historical access.
 
 ## What It Includes
 
 - Edge device runtime for sensor collection on Raspberry Pi
-- Go backend for ingest, batch ingest, SSE streaming, and recent readings
+- Go backend for ingest, batch ingest, SSE streaming, recent reads, and AI insights
 - PostgreSQL persistence via standard `DATABASE_URL` (works with local Postgres, Neon, or other managed providers)
 - Modern React dashboard (`dashboard-v2`)
 
@@ -19,12 +19,9 @@ It collects environmental readings from edge devices, persists them in PostgreSQ
 
 ## Repository Structure
 
-- `backend`:
-Go API service (ingest, batch ingest, stream, readings, health/readiness)
-- `device`:
-Sensor runtime and resilient transmitter (local queue + batch flush)
-- `dashboard-v2`:
-Primary dashboard application
+- `backend`: Go API service + Postgres migrations
+- `device`: Sensor runtime and resilient transmitter (local queue + batch flush)
+- `dashboard-v2`: Primary dashboard application
 
 ## Quick Start
 
@@ -37,30 +34,32 @@ docker compose up --build
 
 Backend runs on `http://localhost:8080`.
 
-### Device Runtime
-
-```bash
-cd device
-cp .env.example .env
-python3 main.py
-```
-
 ### Dashboard
 
 ```bash
 cd dashboard-v2
+cp .env.local.example .env.local
 npm install
 npm run dev
+```
+
+### Device Runtime
+
+```bash
+cd device
+cp .env.local.example .env.local
+uv sync
+uv run main.py
 ```
 
 ## Cloud Deployment Checklist
 
 - Backend:
-Set `INGEST_API_KEY`, `DATABASE_URL`, `CORS_ALLOW_ORIGIN`, and optional OpenAI insight variables.
+Set `INGEST_API_KEY`, `READ_API_KEY`, `DATABASE_URL`, `CORS_ALLOW_ORIGIN`, and optional OpenAI insight variables.
 - Device:
 Set `BACKEND_BASE_URL` to your public API URL.
 - Dashboard:
-Set `VITE_BACKEND_URL` to your backend URL at build time, or host dashboard and backend on the same origin.
+Set `VITE_BACKEND_URL` and `VITE_READ_API_KEY` at build time, or host dashboard and backend on the same origin with matching runtime config.
 - Local development:
 Create each service's `.env.local` from its `.env.local.example`.
 - API base URL assumptions:
@@ -70,9 +69,9 @@ Frontend uses same-origin by default in non-local environments, and switches to 
 
 - `POST /api/ingest` (requires `X-API-Key`)
 - `POST /api/ingest/batch` (requires `X-API-Key`)
-- `GET /api/stream` (SSE)
-- `GET /api/readings?limit=...`
-- `GET /api/insights?analysis_limit=...&limit=...`
+- `GET /api/stream` (SSE, requires read API key)
+- `GET /api/readings?limit=...` (requires read API key)
+- `GET /api/insights?analysis_limit=...&limit=...` (requires read API key)
 - `GET /health`
 - `GET /ready`
 

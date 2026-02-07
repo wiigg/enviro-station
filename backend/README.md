@@ -12,6 +12,11 @@ Minimal Go service for Enviro Station ingestion, streaming, and recent reads.
 - `GET /health`
 - `GET /ready`
 
+Read endpoints accept auth via either:
+
+- `X-API-Key` header
+- `api_key` query parameter (useful for SSE/EventSource clients that cannot set custom headers)
+
 ## Environment
 
 - `PORT` (default: `8080`)
@@ -142,4 +147,19 @@ Example:
 BACKEND_URL='https://api.example.com'
 curl "$BACKEND_URL/api/insights?analysis_limit=720&limit=4" \
   -H 'x-api-key: dev-read-key'
+```
+
+## Example recent readings + stream auth
+
+```bash
+BACKEND_URL='https://api.example.com'
+
+curl "$BACKEND_URL/api/readings?limit=120" \
+  -H 'x-api-key: dev-read-key'
+```
+
+Browser SSE example:
+
+```text
+GET /api/stream?api_key=dev-read-key
 ```
