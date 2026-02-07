@@ -1,27 +1,33 @@
 # Enviro Station
 
-Enviro Station is an end-to-end air quality monitoring platform.
+Enviro Station is an air quality monitoring platform with three services:
 
-It collects environmental readings from edge devices, persists them in PostgreSQL, and exposes ingest-protected write APIs plus realtime and historical read APIs.
+- `device`: Raspberry Pi runtime that reads sensors and ingests readings
+- `backend`: Go API for ingest, storage, streaming, and AI insights
+- `dashboard-v2`: React dashboard for live and historical visibility
 
-## What It Includes
+## Architecture
 
-- Edge device runtime for sensor collection on Raspberry Pi
-- Go backend for ingest, batch ingest, SSE streaming, recent reads, and AI insights
-- PostgreSQL persistence via standard `DATABASE_URL` (works with local Postgres, Neon, or other managed providers)
-- Modern React dashboard (`dashboard-v2`)
+1. Device reads Enviro+ sensors and posts to backend ingest endpoints.
+2. Backend validates readings, stores data in Postgres, and emits SSE updates.
+3. Dashboard reads history and subscribes to stream updates.
 
-## Current Architecture
+## Repository Layout
 
-1. Device reads sensor values and posts to backend ingest endpoints.
-2. Backend validates payloads, stores readings in Postgres, and emits stream events.
-3. Clients consume current/recent data through backend APIs.
+- `backend`: Go API + Postgres migrations
+- `device`: Python runtime with queue-based retry
+- `dashboard-v2`: Vite/React UI
 
-## Repository Structure
+## Environment Strategy
 
-- `backend`: Go API service + Postgres migrations
-- `device`: Sensor runtime and resilient transmitter (local queue + batch flush)
-- `dashboard-v2`: Primary dashboard application
+- Local development: use `.env.local` in each service.
+- Cloud deployment: use `.env.cloud` as your deployment reference input.
+- Committed templates:
+  - `backend/.env.local.example`
+  - `backend/.env.cloud.example`
+  - `dashboard-v2/.env.local.example`
+  - `dashboard-v2/.env.cloud.example`
+  - `device/.env.local.example` (device is local/edge only)
 
 ## Quick Start
 
@@ -29,6 +35,7 @@ It collects environmental readings from edge devices, persists them in PostgreSQ
 
 ```bash
 cd backend
+cp .env.local.example .env.local
 docker compose up --build
 ```
 
@@ -43,32 +50,17 @@ npm install
 npm run dev
 ```
 
-### Device Runtime
+### Device
 
 ```bash
-sudo apt update && sudo apt install -y python3-enviroplus python3-pil python3-dotenv
-
 cd device
+./install.sh
 cp .env.local.example .env.local
-python3 main.py
+source .venv/bin/activate
+python main.py
 ```
 
-## Cloud Deployment Checklist
-
-- Backend:
-Set `INGEST_API_KEY`, `DATABASE_URL`, `CORS_ALLOW_ORIGIN`, and optional OpenAI insight variables.
-- Device:
-Set `BACKEND_BASE_URL` to your public API URL.
-- Dashboard:
-Set `VITE_BACKEND_URL` to your public backend API URL for hosted deployments.
-- Local development:
-Create each service's `.env.local` from its `.env.local.example`.
-- API base URL assumptions:
-Frontend uses same-origin by default in non-local environments, and switches to `http://localhost:8080` only for local Vite dev.
-
-Read endpoints are public by design in this version. Protect them at the edge if your deployment requires restricted access.
-
-## Backend API (Current)
+## Backend API
 
 - `POST /api/ingest` (requires `X-API-Key`)
 - `POST /api/ingest/batch` (requires `X-API-Key`)
@@ -77,9 +69,3 @@ Read endpoints are public by design in this version. Protect them at the edge if
 - `GET /api/insights?analysis_limit=...&limit=...`
 - `GET /health`
 - `GET /ready`
-
-## Status
-
-- Provider-agnostic backend and device runtime
-- Postgres-backed backend with migration support
-- Dashboard v2 with live charts, AI insights, and ops feed

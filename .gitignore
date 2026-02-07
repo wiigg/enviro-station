@@ -1,7 +1,9 @@
 .env
 .env.local
+.env.cloud
 **/.env
 **/.env.local
+**/.env.cloud
 **/.venv
 **/__pycache__/
 **/*.pyc

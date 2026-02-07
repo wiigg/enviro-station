@@ -13,8 +13,7 @@ UPDATE_INTERVAL = 1  # seconds
 
 
 def main():
-    load_dotenv()
-    load_dotenv(".env.local", override=True)
+    load_dotenv(".env.local")
     backend_base_url = os.getenv("BACKEND_BASE_URL")
     ingest_api_key = os.getenv("INGEST_API_KEY")
     queue_file = os.getenv("DEVICE_QUEUE_FILE", "pending_readings.json")
