@@ -2,11 +2,11 @@ try:
     import st7735 as ST7735
 except ImportError:
     import ST7735
+import os
 from pms5003 import PMS5003, ReadTimeoutError, ChecksumMismatchError
 from bme280 import BME280
 from enviroplus import gas
 from PIL import Image, ImageDraw, ImageFont
-from fonts.ttf import RobotoMedium as UserFont
 import time
 
 try:
@@ -19,6 +19,13 @@ import logging
 from device_utilities import get_cpu_temperature, check_wifi, get_serial_number
 
 
+def load_status_font(size):
+    system_font = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    if os.path.exists(system_font):
+        return ImageFont.truetype(system_font, size)
+    return ImageFont.load_default()
+
+
 class DeviceInterface:
     def __init__(self):
         """Initialise device interface"""
@@ -28,7 +35,7 @@ class DeviceInterface:
         self.gas = gas.read_all()
 
         self.font_size = 16
-        self.font = ImageFont.truetype(UserFont, self.font_size)
+        self.font = load_status_font(self.font_size)
 
         # Create LCD instance
         self.disp = ST7735.ST7735(
@@ -94,9 +101,11 @@ class DeviceInterface:
         message = "{}\nWi-Fi: {}".format(id, wifi_status)
         img = Image.new("RGB", (self.WIDTH, self.HEIGHT), color=(0, 0, 0))
         draw = ImageDraw.Draw(img)
-        size_x, size_y = draw.textsize(message, self.font)
+        left, top, right, bottom = draw.multiline_textbbox((0, 0), message, font=self.font)
+        size_x = right - left
+        size_y = bottom - top
         x = (self.WIDTH - size_x) / 2
         y = (self.HEIGHT / 2) - (size_y / 2)
         draw.rectangle((0, 0, 160, 80), back_colour)
-        draw.text((x, y), message, font=self.font, fill=text_colour)
+        draw.multiline_text((x, y), message, font=self.font, fill=text_colour)
         self.disp.display(img)
