@@ -1,4 +1,7 @@
-import ST7735
+try:
+    import st7735 as ST7735
+except ImportError:
+    import ST7735
 from pms5003 import PMS5003, ReadTimeoutError, ChecksumMismatchError
 from bme280 import BME280
 from enviroplus import gas
