@@ -25,7 +25,7 @@ export function normalizeReading(raw) {
     if (!Number.isFinite(parsed)) {
       return null;
     }
-    output[field] = parsed;
+    output[field] = field === "timestamp" ? normalizeTimestamp(parsed) : parsed;
   }
 
   return output;
@@ -189,4 +189,12 @@ function severityForPM10(value) {
     return "warn";
   }
   return "alert";
+}
+
+function normalizeTimestamp(timestamp) {
+  // Device/backend currently emit Unix seconds; charting code expects milliseconds.
+  if (timestamp < 1_000_000_000_000) {
+    return Math.trunc(timestamp * 1000);
+  }
+  return Math.trunc(timestamp);
 }
