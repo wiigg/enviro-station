@@ -408,10 +408,11 @@ export default function App() {
             typeof payload.error === "string"
               ? payload.error
               : `insights request failed with status ${response.status}`;
-          if (errorMessage.includes("not configured")) {
-            throw new Error("AI insights are disabled (set OPENAI_API_KEY on backend)");
-          }
-          throw new Error(errorMessage);
+          console.warn("Insights request failed", {
+            status: response.status,
+            error: errorMessage
+          });
+          throw new Error("AI insights are currently unavailable.");
         }
 
         if (closed) {
@@ -429,8 +430,9 @@ export default function App() {
         if (closed || abortController.signal.aborted) {
           return;
         }
-        const message = error instanceof Error ? error.message : "failed to load insights";
-        setInsightsError(message);
+        const diagnostic = error instanceof Error ? error.message : "failed to load insights";
+        console.error("Insights fetch error", diagnostic);
+        setInsightsError("AI insights are currently unavailable.");
       } finally {
         if (!closed) {
           setIsLoadingInsights(false);
