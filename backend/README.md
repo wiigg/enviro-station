@@ -29,7 +29,7 @@ Ingest endpoints require `INGEST_API_KEY`; read endpoints are public in this ver
 - `RETENTION_ENABLED` (default: `true`)
 - `RETENTION_DAYS` (default: `60`)
 - `RETENTION_BATCH_SIZE` (default: `5000`)
-- `RETENTION_INTERVAL` (default: `1h`)
+- `RETENTION_INTERVAL` (default: `24h`)
 
 Use `backend/.env.example` as the baseline and export/set values in your runtime environment.
 
@@ -46,7 +46,7 @@ go run ./cmd/server
 ## Data retention
 
 Raw readings retention is managed automatically by the backend process.
-By default, readings older than 60 days are deleted in batches every hour.
+By default, readings older than 60 days are deleted in batches every 24 hours.
 
 ## Docker Compose (backend + postgres)
 

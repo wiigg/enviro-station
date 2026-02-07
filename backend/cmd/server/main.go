@@ -263,7 +263,7 @@ func startRetentionWorker(store *server.PostgresStore) {
 		batchSize = 5000
 	}
 
-	interval := durationOrDefault("RETENTION_INTERVAL", time.Hour)
+	interval := durationOrDefault("RETENTION_INTERVAL", 24*time.Hour)
 	if interval < time.Minute {
 		interval = time.Minute
 	}
