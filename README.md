@@ -50,8 +50,7 @@ npm run dev
 cd device
 ./install.sh
 cp .env.example .env
-source .venv/bin/activate
-python main.py
+uv run python main.py
 ```
 
 ## Backend API

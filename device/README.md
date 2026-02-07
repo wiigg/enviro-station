@@ -31,8 +31,7 @@ creates `device/.venv`, and runs `uv sync`.
 
 ```bash
 cd device
-source .venv/bin/activate
-python main.py
+uv run python main.py
 ```
 
 `main.py` loads configuration from `.env`.

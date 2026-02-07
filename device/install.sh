@@ -53,4 +53,4 @@ if [[ ! -f .env ]]; then
 fi
 
 echo "Device bootstrap complete."
-echo "Run: source .venv/bin/activate && python main.py"
+echo "Run: uv run python main.py"
