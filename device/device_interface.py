@@ -26,6 +26,16 @@ def load_status_font(size):
     return ImageFont.load_default()
 
 
+def env_float(name, fallback):
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return fallback
+    try:
+        return float(raw_value)
+    except ValueError:
+        return fallback
+
+
 class DeviceInterface:
     def __init__(self):
         """Initialise device interface"""
@@ -49,7 +59,8 @@ class DeviceInterface:
         self.WIDTH = self.disp.width
         self.HEIGHT = self.disp.height
 
-        self.comp_factor = 1.65
+        self.comp_factor = env_float("DEVICE_TEMP_COMP_FACTOR", 1.45)
+        self.temp_offset_c = env_float("DEVICE_TEMP_OFFSET_C", 0.6)
         self.last_pm_values = {"pm1": "0", "pm2": "0", "pm10": "0"}
 
     def read_values(self):
@@ -58,7 +69,7 @@ class DeviceInterface:
         self.gas = gas.read_all()
         cpu_temp = get_cpu_temperature()
         raw_temp = self.bme280.get_temperature()
-        comp_temp = raw_temp - ((cpu_temp - raw_temp) / self.comp_factor)
+        comp_temp = raw_temp - ((cpu_temp - raw_temp) / self.comp_factor) - self.temp_offset_c
 
         values = {
             "timestamp": "{:.0f}".format(time.time()),
