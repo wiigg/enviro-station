@@ -42,6 +42,10 @@ func main() {
 	defer store.Close()
 
 	options := make([]server.APIOption, 0, 1)
+	readAPIKey := envOrDefault("READ_API_KEY", ingestAPIKey)
+	options = append(options, server.WithReadAPIKey(readAPIKey))
+	options = append(options, server.WithTrustProxyIP(boolOrDefault("TRUST_PROXY_HEADERS", false)))
+
 	openAIAPIKey := strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
 	if openAIAPIKey != "" {
 		insightsModel := envOrDefault("OPENAI_INSIGHTS_MODEL", "gpt-5-mini")
@@ -159,6 +163,22 @@ func intOrDefault(key string, fallback int) int {
 		return fallback
 	}
 	return parsedValue
+}
+
+func boolOrDefault(key string, fallback bool) bool {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+
+	switch strings.ToLower(value) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	case "0", "false", "no", "n", "off":
+		return false
+	default:
+		return fallback
+	}
 }
 
 func loadLocalEnvFiles(paths ...string) {

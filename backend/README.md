@@ -6,9 +6,9 @@ Minimal Go service for Enviro Station ingestion, streaming, and recent reads.
 
 - `POST /api/ingest` (requires `X-API-Key`)
 - `POST /api/ingest/batch` (requires `X-API-Key`)
-- `GET /api/stream` (SSE realtime stream)
-- `GET /api/readings?limit=100`
-- `GET /api/insights?analysis_limit=360&limit=4` (AI-generated insights)
+- `GET /api/stream` (SSE realtime stream, requires read API key)
+- `GET /api/readings?limit=100` (requires read API key)
+- `GET /api/insights?analysis_limit=360&limit=4` (AI-generated insights, requires read API key)
 - `GET /health`
 - `GET /ready`
 
@@ -17,8 +17,10 @@ Minimal Go service for Enviro Station ingestion, streaming, and recent reads.
 - `PORT` (default: `8080`)
 - `CORS_ALLOW_ORIGIN` (default: `*`; set to exact origin or comma-separated origin list in production)
 - `INGEST_API_KEY` (required)
+- `READ_API_KEY` (default: same value as `INGEST_API_KEY`)
 - `DATABASE_URL` (required, standard Postgres DSN)
 - `PG_MAX_CONNS` (default: `10`)
+- `TRUST_PROXY_HEADERS` (default: `false`; only set `true` behind a trusted reverse proxy)
 - `OPENAI_API_KEY` (optional, enables `/api/insights`)
 - `OPENAI_INSIGHTS_MODEL` (default: `gpt-5-mini`)
 - `OPENAI_BASE_URL` (default: `https://api.openai.com/v1`)
@@ -40,6 +42,7 @@ Environment variables already set in your shell take precedence.
 
 ```bash
 INGEST_API_KEY='<secure-random-key>' \
+READ_API_KEY='<separate-read-key>' \
 CORS_ALLOW_ORIGIN='https://dashboard.example.com' \
 DATABASE_URL='postgres://user:pass@db.example.com:5432/envirostation?sslmode=require' \
 OPENAI_API_KEY='<optional>' \
@@ -107,6 +110,7 @@ Useful flags:
 docker build -t enviro-ingest ./backend
 docker run --rm -p 8080:8080 \
   -e INGEST_API_KEY='dev-ingest-key' \
+  -e READ_API_KEY='dev-read-key' \
   -e DATABASE_URL='postgres://postgres:postgres@host.docker.internal:5432/envirostation?sslmode=disable' \
   enviro-ingest
 ```
@@ -136,5 +140,6 @@ Example:
 
 ```bash
 BACKEND_URL='https://api.example.com'
-curl "$BACKEND_URL/api/insights?analysis_limit=720&limit=4"
+curl "$BACKEND_URL/api/insights?analysis_limit=720&limit=4" \
+  -H 'x-api-key: dev-read-key'
 ```

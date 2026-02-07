@@ -254,12 +254,28 @@ func TestHandleReadyReturnsServiceUnavailableWhenStoreUnreachable(t *testing.T) 
 	}
 }
 
+func TestHandleReadingsRejectsUnauthorized(t *testing.T) {
+	store := &fakeStore{}
+	api := NewAPI(store, "secret")
+	handler := api.Handler()
+
+	request := httptest.NewRequest(http.MethodGet, "/api/readings?limit=1", nil)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, response.Code)
+	}
+}
+
 func TestHandleAlertsReturnsServiceUnavailableWithoutAnalyzer(t *testing.T) {
 	store := &fakeStore{}
 	api := NewAPI(store, "secret")
 	handler := api.Handler()
 
 	request := httptest.NewRequest(http.MethodGet, "/api/insights", nil)
+	request.Header.Set("X-API-Key", "secret")
 	response := httptest.NewRecorder()
 
 	handler.ServeHTTP(response, request)
@@ -297,6 +313,7 @@ func TestHandleAlertsReturnsAnalyzedAlerts(t *testing.T) {
 	handler := api.Handler()
 
 	request := httptest.NewRequest(http.MethodGet, "/api/insights?analysis_limit=100&limit=1", nil)
+	request.Header.Set("X-API-Key", "secret")
 	response := httptest.NewRecorder()
 
 	handler.ServeHTTP(response, request)
@@ -341,6 +358,7 @@ func TestHandleAlertsReturnsBadGatewayWhenAnalyzerFails(t *testing.T) {
 	handler := api.Handler()
 
 	request := httptest.NewRequest(http.MethodGet, "/api/insights", nil)
+	request.Header.Set("X-API-Key", "secret")
 	response := httptest.NewRecorder()
 
 	handler.ServeHTTP(response, request)
@@ -367,6 +385,7 @@ func TestHandleInsightsRateLimit(t *testing.T) {
 
 	for index := 0; index < 30; index++ {
 		request := httptest.NewRequest(http.MethodGet, "/api/insights", nil)
+		request.Header.Set("X-API-Key", "secret")
 		request.RemoteAddr = "203.0.113.2:5050"
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)
@@ -376,6 +395,7 @@ func TestHandleInsightsRateLimit(t *testing.T) {
 	}
 
 	request := httptest.NewRequest(http.MethodGet, "/api/insights", nil)
+	request.Header.Set("X-API-Key", "secret")
 	request.RemoteAddr = "203.0.113.2:5050"
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)

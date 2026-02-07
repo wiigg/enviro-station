@@ -72,18 +72,20 @@ func (limiter *requestLimiter) cleanup(now time.Time) {
 	}
 }
 
-func clientIdentity(request *http.Request) string {
-	forwardedFor := strings.TrimSpace(request.Header.Get("X-Forwarded-For"))
-	if forwardedFor != "" {
-		firstHop, _, _ := strings.Cut(forwardedFor, ",")
-		if ip := strings.TrimSpace(firstHop); ip != "" {
-			return ip
+func clientIdentity(request *http.Request, trustProxyHeaders bool) string {
+	if trustProxyHeaders {
+		forwardedFor := strings.TrimSpace(request.Header.Get("X-Forwarded-For"))
+		if forwardedFor != "" {
+			firstHop, _, _ := strings.Cut(forwardedFor, ",")
+			if ip := strings.TrimSpace(firstHop); ip != "" {
+				return ip
+			}
 		}
-	}
 
-	realIP := strings.TrimSpace(request.Header.Get("X-Real-IP"))
-	if realIP != "" {
-		return realIP
+		realIP := strings.TrimSpace(request.Header.Get("X-Real-IP"))
+		if realIP != "" {
+			return realIP
+		}
 	}
 
 	host, _, err := net.SplitHostPort(strings.TrimSpace(request.RemoteAddr))

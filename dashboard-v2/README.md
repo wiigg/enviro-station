@@ -17,6 +17,7 @@ Modern dashboard for Enviro Station operations.
 
 ```bash
 VITE_BACKEND_URL=https://api.example.com
+VITE_READ_API_KEY=<read-api-key>
 ```
 
 If omitted in non-local deployments, the dashboard uses the current origin as backend base URL.

@@ -49,6 +49,13 @@ function compactText(value) {
   return value.replace(/\s+/g, " ").trim();
 }
 
+function withReadAPIKeyHeaders(readAPIKey) {
+  if (!readAPIKey) {
+    return undefined;
+  }
+  return { "X-API-Key": readAPIKey };
+}
+
 async function parseJSONResponse(response, endpointName, requestUrl, backendBaseUrl) {
   const payloadText = await response.text();
   if (!payloadText) {
@@ -211,6 +218,10 @@ function insightKindLabel(kind) {
 
 export default function App() {
   const backendBaseUrl = useMemo(() => resolveBackendBaseUrl(), []);
+  const readAPIKey = useMemo(() => {
+    const env = import.meta.env.VITE_READ_API_KEY;
+    return typeof env === "string" ? env.trim() : "";
+  }, []);
 
   const [windowId, setWindowId] = useState("live");
   const [readings, setReadings] = useState([]);
@@ -244,7 +255,10 @@ export default function App() {
 
       try {
         const historyUrl = `${backendBaseUrl}/api/readings?limit=${selectedWindow.limit}`;
-        const response = await fetch(historyUrl, { signal: abortController.signal });
+        const response = await fetch(historyUrl, {
+          signal: abortController.signal,
+          headers: withReadAPIKeyHeaders(readAPIKey)
+        });
         const payload = await parseJSONResponse(
           response,
           "History endpoint",
@@ -287,7 +301,14 @@ export default function App() {
     return () => {
       abortController.abort();
     };
-  }, [addFeedItem, backendBaseUrl, selectedWindow.id, selectedWindow.label, selectedWindow.limit]);
+  }, [
+    addFeedItem,
+    backendBaseUrl,
+    readAPIKey,
+    selectedWindow.id,
+    selectedWindow.label,
+    selectedWindow.limit
+  ]);
 
   useEffect(() => {
     let closed = false;
@@ -301,7 +322,11 @@ export default function App() {
       }
 
       setConnectionStatus("connecting");
-      eventSource = new EventSource(`${backendBaseUrl}/api/stream`);
+      const streamURL = new URL(`${backendBaseUrl}/api/stream`);
+      if (readAPIKey) {
+        streamURL.searchParams.set("api_key", readAPIKey);
+      }
+      eventSource = new EventSource(streamURL.toString());
 
       const handleReading = (event) => {
         try {
@@ -360,7 +385,7 @@ export default function App() {
         eventSource.close();
       }
     };
-  }, [addFeedItem, backendBaseUrl]);
+  }, [addFeedItem, backendBaseUrl, readAPIKey]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -388,7 +413,10 @@ export default function App() {
     async function loadInsights() {
       try {
         const insightsUrl = `${backendBaseUrl}/api/insights?analysis_limit=${selectedWindow.limit}&limit=4`;
-        const response = await fetch(insightsUrl, { signal: abortController.signal });
+        const response = await fetch(insightsUrl, {
+          signal: abortController.signal,
+          headers: withReadAPIKeyHeaders(readAPIKey)
+        });
         const payload = await parseJSONResponse(
           response,
           "Insights endpoint",
@@ -441,7 +469,7 @@ export default function App() {
         window.clearTimeout(timer);
       }
     };
-  }, [backendBaseUrl, selectedWindow.limit]);
+  }, [backendBaseUrl, readAPIKey, selectedWindow.limit]);
 
   const visibleReadings = useMemo(() => {
     if (readings.length <= selectedWindow.limit) {
