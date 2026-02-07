@@ -128,7 +128,12 @@ func (analyzer *openAIAlertAnalyzer) Analyze(
 	}
 
 	requestPayload := map[string]any{
-		"model": analyzer.model,
+		"model":             analyzer.model,
+		"store":             false,
+		"max_output_tokens": 500,
+		"reasoning": map[string]any{
+			"effort": "low",
+		},
 		"input": []map[string]any{
 			{
 				"role": "system",
@@ -150,6 +155,7 @@ func (analyzer *openAIAlertAnalyzer) Analyze(
 			},
 		},
 		"text": map[string]any{
+			"verbosity": "low",
 			"format": map[string]any{
 				"type":   "json_schema",
 				"name":   "enviro_alerts",
