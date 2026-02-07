@@ -42,8 +42,6 @@ func main() {
 	defer store.Close()
 
 	options := make([]server.APIOption, 0, 1)
-	readAPIKey := envOrDefault("READ_API_KEY", ingestAPIKey)
-	options = append(options, server.WithReadAPIKey(readAPIKey))
 	options = append(options, server.WithTrustProxyIP(boolOrDefault("TRUST_PROXY_HEADERS", false)))
 
 	openAIAPIKey := strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))

@@ -55,11 +55,11 @@ uv run main.py
 ## Cloud Deployment Checklist
 
 - Backend:
-Set `INGEST_API_KEY`, `READ_API_KEY`, `DATABASE_URL`, `CORS_ALLOW_ORIGIN`, and optional OpenAI insight variables.
+Set `INGEST_API_KEY`, `DATABASE_URL`, `CORS_ALLOW_ORIGIN`, and optional OpenAI insight variables.
 - Device:
 Set `BACKEND_BASE_URL` to your public API URL.
 - Dashboard:
-Set `VITE_BACKEND_URL` and `VITE_READ_API_KEY` at build time, or host dashboard and backend on the same origin with matching runtime config.
+Set `VITE_BACKEND_URL` to your public backend API URL for hosted deployments.
 - Local development:
 Create each service's `.env.local` from its `.env.local.example`.
 - API base URL assumptions:
@@ -69,9 +69,9 @@ Frontend uses same-origin by default in non-local environments, and switches to 
 
 - `POST /api/ingest` (requires `X-API-Key`)
 - `POST /api/ingest/batch` (requires `X-API-Key`)
-- `GET /api/stream` (SSE, requires read API key)
-- `GET /api/readings?limit=...` (requires read API key)
-- `GET /api/insights?analysis_limit=...&limit=...` (requires read API key)
+- `GET /api/stream` (SSE)
+- `GET /api/readings?limit=...`
+- `GET /api/insights?analysis_limit=...&limit=...`
 - `GET /health`
 - `GET /ready`
 

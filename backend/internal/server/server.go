@@ -20,7 +20,6 @@ const (
 type API struct {
 	store         Store
 	ingestAPIKey  string
-	readAPIKey    string
 	trustProxyIP  bool
 	stream        *streamHub
 	alertAnalyzer AlertAnalyzer
@@ -35,14 +34,6 @@ func WithAlertAnalyzer(analyzer AlertAnalyzer) APIOption {
 	}
 }
 
-func WithReadAPIKey(apiKey string) APIOption {
-	return func(api *API) {
-		if trimmed := strings.TrimSpace(apiKey); trimmed != "" {
-			api.readAPIKey = trimmed
-		}
-	}
-}
-
 func WithTrustProxyIP(enabled bool) APIOption {
 	return func(api *API) {
 		api.trustProxyIP = enabled
@@ -54,7 +45,6 @@ func NewAPI(store Store, ingestAPIKey string, options ...APIOption) *API {
 	api := &API{
 		store:        store,
 		ingestAPIKey: normalizedIngestAPIKey,
-		readAPIKey:   normalizedIngestAPIKey,
 		stream:       newStreamHub(),
 		insightsRate: newRequestLimiter(30, time.Minute),
 	}
@@ -174,9 +164,6 @@ func (api *API) handleReadings(response http.ResponseWriter, request *http.Reque
 		writeError(response, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	if !api.authorizeReadRequest(response, request) {
-		return
-	}
 
 	limit := 100
 	if rawLimit := request.URL.Query().Get("limit"); rawLimit != "" {
@@ -200,9 +187,6 @@ func (api *API) handleReadings(response http.ResponseWriter, request *http.Reque
 func (api *API) handleStream(response http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodGet {
 		writeError(response, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	if !api.authorizeReadRequest(response, request) {
 		return
 	}
 
@@ -248,9 +232,6 @@ func (api *API) handleStream(response http.ResponseWriter, request *http.Request
 func (api *API) handleInsights(response http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodGet {
 		writeError(response, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	if !api.authorizeReadRequest(response, request) {
 		return
 	}
 
@@ -311,18 +292,6 @@ func (api *API) handleInsights(response http.ResponseWriter, request *http.Reque
 func (api *API) authorizeIngestRequest(response http.ResponseWriter, request *http.Request) bool {
 	providedKey := request.Header.Get("X-API-Key")
 	if subtle.ConstantTimeCompare([]byte(providedKey), []byte(api.ingestAPIKey)) != 1 {
-		writeError(response, http.StatusUnauthorized, "unauthorized")
-		return false
-	}
-	return true
-}
-
-func (api *API) authorizeReadRequest(response http.ResponseWriter, request *http.Request) bool {
-	providedKey := request.Header.Get("X-API-Key")
-	if providedKey == "" {
-		providedKey = strings.TrimSpace(request.URL.Query().Get("api_key"))
-	}
-	if subtle.ConstantTimeCompare([]byte(providedKey), []byte(api.readAPIKey)) != 1 {
 		writeError(response, http.StatusUnauthorized, "unauthorized")
 		return false
 	}

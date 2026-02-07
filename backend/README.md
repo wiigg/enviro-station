@@ -6,23 +6,17 @@ Minimal Go service for Enviro Station ingestion, streaming, and recent reads.
 
 - `POST /api/ingest` (requires `X-API-Key`)
 - `POST /api/ingest/batch` (requires `X-API-Key`)
-- `GET /api/stream` (SSE realtime stream, requires read API key)
-- `GET /api/readings?limit=100` (requires read API key)
-- `GET /api/insights?analysis_limit=360&limit=4` (AI-generated insights, requires read API key)
+- `GET /api/stream` (SSE realtime stream)
+- `GET /api/readings?limit=100`
+- `GET /api/insights?analysis_limit=360&limit=4` (AI-generated insights)
 - `GET /health`
 - `GET /ready`
-
-Read endpoints accept auth via either:
-
-- `X-API-Key` header
-- `api_key` query parameter (useful for SSE/EventSource clients that cannot set custom headers)
 
 ## Environment
 
 - `PORT` (default: `8080`)
 - `CORS_ALLOW_ORIGIN` (default: `*`; set to exact origin or comma-separated origin list in production)
 - `INGEST_API_KEY` (required)
-- `READ_API_KEY` (default: same value as `INGEST_API_KEY`)
 - `DATABASE_URL` (required, standard Postgres DSN)
 - `PG_MAX_CONNS` (default: `10`)
 - `TRUST_PROXY_HEADERS` (default: `false`; only set `true` behind a trusted reverse proxy)
@@ -47,7 +41,6 @@ Environment variables already set in your shell take precedence.
 
 ```bash
 INGEST_API_KEY='<secure-random-key>' \
-READ_API_KEY='<separate-read-key>' \
 CORS_ALLOW_ORIGIN='https://dashboard.example.com' \
 DATABASE_URL='postgres://user:pass@db.example.com:5432/envirostation?sslmode=require' \
 OPENAI_API_KEY='<optional>' \
@@ -115,7 +108,6 @@ Useful flags:
 docker build -t enviro-ingest ./backend
 docker run --rm -p 8080:8080 \
   -e INGEST_API_KEY='dev-ingest-key' \
-  -e READ_API_KEY='dev-read-key' \
   -e DATABASE_URL='postgres://postgres:postgres@host.docker.internal:5432/envirostation?sslmode=disable' \
   enviro-ingest
 ```
@@ -146,7 +138,7 @@ Example:
 ```bash
 BACKEND_URL='https://api.example.com'
 curl "$BACKEND_URL/api/insights?analysis_limit=720&limit=4" \
-  -H 'x-api-key: dev-read-key'
+  -H 'accept: application/json'
 ```
 
 ## Example recent readings + stream auth
@@ -154,12 +146,11 @@ curl "$BACKEND_URL/api/insights?analysis_limit=720&limit=4" \
 ```bash
 BACKEND_URL='https://api.example.com'
 
-curl "$BACKEND_URL/api/readings?limit=120" \
-  -H 'x-api-key: dev-read-key'
+curl "$BACKEND_URL/api/readings?limit=120"
 ```
 
 Browser SSE example:
 
 ```text
-GET /api/stream?api_key=dev-read-key
+GET /api/stream
 ```
