@@ -27,19 +27,17 @@ Ingest endpoints require `INGEST_API_KEY`; read endpoints are public in this ver
 - `OPENAI_INSIGHTS_MAX` (default: `4`)
 - `OPENAI_INSIGHTS_CACHE_SECONDS` (default/minimum: `30`)
 
-## Local Run
+Use `backend/.env.example` as the baseline and export/set values in your runtime environment.
+
+## Run
 
 ```bash
 cd backend
-cp .env.local.example .env.local
+cp .env.example .env
 go run ./cmd/server
 ```
 
-`cmd/server` auto-loads `.env.local` when present.
-
-## Cloud Run
-
-Use `backend/.env.cloud.example` as your reference and set variables in your platform secret/env system.
+`cmd/server` auto-loads `.env` when present.
 
 ## Docker Compose (backend + postgres)
 
@@ -48,7 +46,7 @@ cd backend
 docker compose up --build
 ```
 
-## Device simulator (dev)
+## Device Simulator (dev)
 
 ```bash
 go run ./cmd/simulator \

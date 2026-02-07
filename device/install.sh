@@ -47,9 +47,9 @@ uv venv --python 3.13 .venv
 echo "Syncing Python dependencies..."
 uv sync
 
-if [[ ! -f .env.local ]]; then
-  cp .env.local.example .env.local
-  echo "Created .env.local from template. Fill in BACKEND_BASE_URL and INGEST_API_KEY."
+if [[ ! -f .env ]]; then
+  cp .env.example .env
+  echo "Created .env from template. Fill in BACKEND_BASE_URL and INGEST_API_KEY."
 fi
 
 echo "Device bootstrap complete."

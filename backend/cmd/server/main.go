@@ -15,7 +15,7 @@ import (
 )
 
 func main() {
-	loadLocalEnvFiles(".env.local")
+	loadLocalEnvFiles(".env")
 
 	port := envOrDefault("PORT", "8080")
 	ingestAPIKey := strings.TrimSpace(os.Getenv("INGEST_API_KEY"))

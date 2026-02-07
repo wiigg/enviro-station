@@ -4,13 +4,12 @@ Modern React dashboard for Enviro Station.
 
 ## Environment
 
-- Local dev: copy `.env.local.example` to `.env.local`
-- Cloud deploy: use `.env.cloud.example` as your platform env reference
+Use `dashboard-v2/.env.example` as the baseline.
 
 Required variable:
 
 ```bash
-VITE_BACKEND_URL=https://api.example.com
+VITE_BACKEND_URL=http://localhost:8080
 ```
 
 If `VITE_BACKEND_URL` is unset:
@@ -21,7 +20,7 @@ If `VITE_BACKEND_URL` is unset:
 
 ```bash
 cd dashboard-v2
-cp .env.local.example .env.local
+cp .env.example .env
 npm install
 npm run dev
 ```

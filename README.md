@@ -18,16 +18,10 @@ Enviro Station is an air quality monitoring platform with three services:
 - `device`: Python runtime with queue-based retry
 - `dashboard-v2`: Vite/React UI
 
-## Environment Strategy
+## Environment Files
 
-- Local development: use `.env.local` in each service.
-- Cloud deployment: use `.env.cloud` as your deployment reference input.
-- Committed templates:
-  - `backend/.env.local.example`
-  - `backend/.env.cloud.example`
-  - `dashboard-v2/.env.local.example`
-  - `dashboard-v2/.env.cloud.example`
-  - `device/.env.local.example` (device is local/edge only)
+Each service tracks a single template file: `.env.example`.
+Create a local runtime file by copying it to `.env`.
 
 ## Quick Start
 
@@ -35,7 +29,7 @@ Enviro Station is an air quality monitoring platform with three services:
 
 ```bash
 cd backend
-cp .env.local.example .env.local
+cp .env.example .env
 docker compose up --build
 ```
 
@@ -45,7 +39,7 @@ Backend runs on `http://localhost:8080`.
 
 ```bash
 cd dashboard-v2
-cp .env.local.example .env.local
+cp .env.example .env
 npm install
 npm run dev
 ```
@@ -55,7 +49,7 @@ npm run dev
 ```bash
 cd device
 ./install.sh
-cp .env.local.example .env.local
+cp .env.example .env
 source .venv/bin/activate
 python main.py
 ```

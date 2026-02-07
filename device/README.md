@@ -21,7 +21,7 @@ The device service reads Enviro+ sensors and sends readings to the backend inges
 ```bash
 cd device
 ./install.sh
-cp .env.local.example .env.local
+cp .env.example .env
 ```
 
 `install.sh` installs required OS packages, configures Pi interfaces, installs `uv`,
@@ -35,7 +35,7 @@ source .venv/bin/activate
 python main.py
 ```
 
-`main.py` loads configuration from `.env.local`.
+`main.py` loads configuration from `.env`.
 If the backend is unavailable, readings are queued locally and retried in batches.
 
 ## Auto-start on boot (systemd)

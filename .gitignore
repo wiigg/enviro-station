@@ -1,9 +1,8 @@
 .env
-.env.local
-.env.cloud
+!.env.example
 **/.env
-**/.env.local
-**/.env.cloud
+**/.env.*
+!**/.env.example
 **/.venv
 **/__pycache__/
 **/*.pyc
