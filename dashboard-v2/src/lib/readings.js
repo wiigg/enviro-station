@@ -12,7 +12,9 @@ const NUMERIC_FIELDS = [
 ];
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const YESTERDAY_TOLERANCE_MS = 2 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+const NEARBY_YESTERDAY_WINDOW_MS = 90 * 60 * 1000;
+const MIN_BUCKET_SAMPLES = 3;
 
 export function normalizeReading(raw) {
   if (!raw || typeof raw !== "object") {
@@ -111,18 +113,35 @@ function average(values) {
 }
 
 function metricTrend(readings, samples, latest, field, unit, decimals) {
-  const yesterdayReading = findClosestReading(
+  const yesterdayHourBaseline = averageFieldInWindow(
     readings,
-    latest.timestamp - DAY_MS,
-    YESTERDAY_TOLERANCE_MS
+    startOfHour(latest.timestamp - DAY_MS),
+    startOfHour(latest.timestamp - DAY_MS) + HOUR_MS,
+    field
   );
 
-  if (yesterdayReading) {
+  if (Number.isFinite(yesterdayHourBaseline)) {
     return describeDelta(
-      latest[field] - yesterdayReading[field],
+      latest[field] - yesterdayHourBaseline,
       unit,
       decimals,
-      "this time yesterday"
+      "this hour yesterday"
+    );
+  }
+
+  const nearbyYesterdayBaseline = averageFieldInWindow(
+    readings,
+    latest.timestamp - DAY_MS - NEARBY_YESTERDAY_WINDOW_MS,
+    latest.timestamp - DAY_MS + NEARBY_YESTERDAY_WINDOW_MS,
+    field
+  );
+
+  if (Number.isFinite(nearbyYesterdayBaseline)) {
+    return describeDelta(
+      latest[field] - nearbyYesterdayBaseline,
+      unit,
+      decimals,
+      "around this time yesterday"
     );
   }
 
@@ -132,29 +151,6 @@ function metricTrend(readings, samples, latest, field, unit, decimals) {
   }
 
   return describeDelta(latest[field] - baseline, unit, decimals, "recent average");
-}
-
-function findClosestReading(readings, targetTimestamp, maxDistanceMs) {
-  if (!readings.length) {
-    return null;
-  }
-
-  let closest = null;
-  let closestDistance = Number.POSITIVE_INFINITY;
-
-  for (const reading of readings) {
-    const distance = Math.abs(reading.timestamp - targetTimestamp);
-    if (distance < closestDistance) {
-      closest = reading;
-      closestDistance = distance;
-    }
-  }
-
-  if (closestDistance > maxDistanceMs) {
-    return null;
-  }
-
-  return closest;
 }
 
 function describeDelta(delta, unit, decimals, referenceLabel) {
@@ -197,4 +193,20 @@ function normalizeTimestamp(timestamp) {
     return Math.trunc(timestamp * 1000);
   }
   return Math.trunc(timestamp);
+}
+
+function startOfHour(timestamp) {
+  return timestamp - (timestamp % HOUR_MS);
+}
+
+function averageFieldInWindow(readings, startInclusive, endExclusive, field) {
+  const values = readings
+    .filter((reading) => reading.timestamp >= startInclusive && reading.timestamp < endExclusive)
+    .map((reading) => reading[field]);
+
+  if (values.length < MIN_BUCKET_SAMPLES) {
+    return Number.NaN;
+  }
+
+  return average(values);
 }
