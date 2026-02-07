@@ -45,6 +45,39 @@ function resolveBackendBaseUrl() {
   return origin;
 }
 
+function compactText(value) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+async function parseJSONResponse(response, endpointName, requestUrl, backendBaseUrl) {
+  const payloadText = await response.text();
+  if (!payloadText) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(payloadText);
+  } catch (_error) {
+    const compactPayload = compactText(payloadText);
+    const contentType = (response.headers.get("content-type") || "").toLowerCase();
+    const looksHTML =
+      contentType.includes("text/html") ||
+      compactPayload.toLowerCase().startsWith("<!doctype html") ||
+      compactPayload.toLowerCase().startsWith("<html");
+
+    if (looksHTML) {
+      throw new Error(
+        `${endpointName} returned HTML. Check VITE_BACKEND_URL (${backendBaseUrl}) and verify ${requestUrl} points to the backend API.`
+      );
+    }
+
+    const preview = compactPayload.slice(0, 140);
+    throw new Error(
+      `${endpointName} returned non-JSON${preview ? `: ${preview}` : ""}`
+    );
+  }
+}
+
 function buildFeedItem(title, detail) {
   return {
     id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -212,19 +245,19 @@ export default function App() {
       try {
         const historyUrl = `${backendBaseUrl}/api/readings?limit=${selectedWindow.limit}`;
         const response = await fetch(historyUrl, { signal: abortController.signal });
+        const payload = await parseJSONResponse(
+          response,
+          "History endpoint",
+          historyUrl,
+          backendBaseUrl
+        );
 
         if (!response.ok) {
-          throw new Error(`History request failed with status ${response.status}`);
-        }
-
-        const payloadText = await response.text();
-        let payload;
-        try {
-          payload = JSON.parse(payloadText);
-        } catch (_error) {
-          throw new Error(
-            `History endpoint returned non-JSON. Check VITE_BACKEND_URL (${backendBaseUrl}).`
-          );
+          const errorMessage =
+            typeof payload.error === "string"
+              ? payload.error
+              : `History request failed with status ${response.status}`;
+          throw new Error(errorMessage);
         }
 
         const normalized = normalizeReadings(payload.readings);
@@ -356,16 +389,12 @@ export default function App() {
       try {
         const insightsUrl = `${backendBaseUrl}/api/insights?analysis_limit=${selectedWindow.limit}&limit=4`;
         const response = await fetch(insightsUrl, { signal: abortController.signal });
-
-        const payloadText = await response.text();
-        let payload = {};
-        if (payloadText) {
-          try {
-            payload = JSON.parse(payloadText);
-          } catch (_error) {
-            throw new Error("insights endpoint returned non-JSON");
-          }
-        }
+        const payload = await parseJSONResponse(
+          response,
+          "Insights endpoint",
+          insightsUrl,
+          backendBaseUrl
+        );
 
         if (!response.ok) {
           const errorMessage =
