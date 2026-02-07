@@ -26,6 +26,10 @@ Ingest endpoints require `INGEST_API_KEY`; read endpoints are public in this ver
 - `OPENAI_BASE_URL` (default: `https://api.openai.com/v1`)
 - `OPENAI_INSIGHTS_MAX` (default: `4`)
 - `OPENAI_INSIGHTS_CACHE_SECONDS` (default/minimum: `30`)
+- `RETENTION_ENABLED` (default: `true`)
+- `RETENTION_DAYS` (default: `60`)
+- `RETENTION_BATCH_SIZE` (default: `5000`)
+- `RETENTION_INTERVAL` (default: `1h`)
 
 Use `backend/.env.example` as the baseline and export/set values in your runtime environment.
 
@@ -38,6 +42,11 @@ go run ./cmd/server
 ```
 
 `cmd/server` auto-loads `.env` when present.
+
+## Data retention
+
+Raw readings retention is managed automatically by the backend process.
+By default, readings older than 60 days are deleted in batches every hour.
 
 ## Docker Compose (backend + postgres)
 

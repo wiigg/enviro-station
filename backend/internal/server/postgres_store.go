@@ -238,6 +238,31 @@ LIMIT $1
 	return readings, nil
 }
 
+func (store *PostgresStore) DeleteOlderThan(ctx context.Context, cutoffTimestamp int64, limit int) (int64, error) {
+	if limit <= 0 {
+		limit = 1000
+	}
+
+	const query = `
+WITH expired AS (
+  SELECT id
+  FROM sensor_readings
+  WHERE timestamp < $1
+  ORDER BY timestamp
+  LIMIT $2
+)
+DELETE FROM sensor_readings AS readings
+USING expired
+WHERE readings.id = expired.id
+`
+
+	result, err := store.pool.Exec(ctx, query, cutoffTimestamp, limit)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 func (store *PostgresStore) Ping(ctx context.Context) error {
 	pingCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()

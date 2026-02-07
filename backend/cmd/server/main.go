@@ -41,6 +41,8 @@ func main() {
 	}
 	defer store.Close()
 
+	startRetentionWorker(store)
+
 	options := make([]server.APIOption, 0, 1)
 	options = append(options, server.WithTrustProxyIP(boolOrDefault("TRUST_PROXY_HEADERS", false)))
 
@@ -163,6 +165,19 @@ func intOrDefault(key string, fallback int) int {
 	return parsedValue
 }
 
+func durationOrDefault(key string, fallback time.Duration) time.Duration {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+
+	parsedValue, err := time.ParseDuration(value)
+	if err != nil || parsedValue <= 0 {
+		return fallback
+	}
+	return parsedValue
+}
+
 func boolOrDefault(key string, fallback bool) bool {
 	value := strings.TrimSpace(os.Getenv(key))
 	if value == "" {
@@ -230,4 +245,66 @@ func loadLocalEnvFile(path string) error {
 	}
 
 	return scanner.Err()
+}
+
+func startRetentionWorker(store *server.PostgresStore) {
+	if !boolOrDefault("RETENTION_ENABLED", true) {
+		log.Printf("retention cleanup disabled")
+		return
+	}
+
+	retentionDays := intOrDefault("RETENTION_DAYS", 60)
+	if retentionDays < 1 {
+		retentionDays = 60
+	}
+
+	batchSize := intOrDefault("RETENTION_BATCH_SIZE", 5000)
+	if batchSize < 1 {
+		batchSize = 5000
+	}
+
+	interval := durationOrDefault("RETENTION_INTERVAL", time.Hour)
+	if interval < time.Minute {
+		interval = time.Minute
+	}
+
+	cleanup := func() {
+		cutoffTimestamp := time.Now().Add(-time.Duration(retentionDays) * 24 * time.Hour).Unix()
+
+		for {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			deletedRows, err := store.DeleteOlderThan(cleanupCtx, cutoffTimestamp, batchSize)
+			cancel()
+			if err != nil {
+				log.Printf("retention cleanup failed: %v", err)
+				return
+			}
+
+			if deletedRows == 0 {
+				return
+			}
+
+			log.Printf(
+				"retention cleanup deleted %d rows older than unix timestamp %d",
+				deletedRows,
+				cutoffTimestamp,
+			)
+		}
+	}
+
+	log.Printf(
+		"retention cleanup enabled days=%d interval=%s batch_size=%d",
+		retentionDays,
+		interval.String(),
+		batchSize,
+	)
+
+	go func() {
+		cleanup()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for range ticker.C {
+			cleanup()
+		}
+	}()
 }
