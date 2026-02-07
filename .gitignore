@@ -2,5 +2,11 @@
 .env.local
 **/.env
 **/.env.local
+**/.venv
+**/__pycache__/
+**/*.pyc
+**/node_modules/
+**/dist/
+**/.vite/
+.DS_Store
 venv
-__*

@@ -2,7 +2,7 @@
 
 Enviro Station is an end-to-end air quality monitoring platform.
 
-It collects environmental readings from edge devices, persists them in PostgreSQL, and exposes authenticated APIs for realtime and historical access.
+It collects environmental readings from edge devices, persists them in PostgreSQL, and exposes ingest-protected write APIs plus realtime and historical read APIs.
 
 ## What It Includes
 
@@ -64,6 +64,8 @@ Set `VITE_BACKEND_URL` to your public backend API URL for hosted deployments.
 Create each service's `.env.local` from its `.env.local.example`.
 - API base URL assumptions:
 Frontend uses same-origin by default in non-local environments, and switches to `http://localhost:8080` only for local Vite dev.
+
+Read endpoints are public by design in this version. Protect them at the edge if your deployment requires restricted access.
 
 ## Backend API (Current)
 

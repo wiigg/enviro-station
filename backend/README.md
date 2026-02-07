@@ -1,6 +1,7 @@
 # Backend Ingest Service
 
 Minimal Go service for Enviro Station ingestion, streaming, and recent reads.
+Ingest endpoints require `INGEST_API_KEY`; read endpoints are public in this version.
 
 ## Endpoints
 
@@ -137,11 +138,10 @@ Example:
 
 ```bash
 BACKEND_URL='https://api.example.com'
-curl "$BACKEND_URL/api/insights?analysis_limit=720&limit=4" \
-  -H 'accept: application/json'
+curl "$BACKEND_URL/api/insights?analysis_limit=720&limit=4"
 ```
 
-## Example recent readings + stream auth
+## Example recent readings + stream
 
 ```bash
 BACKEND_URL='https://api.example.com'
