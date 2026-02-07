@@ -15,7 +15,7 @@ Minimal Go service for Enviro Station ingestion, streaming, and recent reads.
 ## Environment
 
 - `PORT` (default: `8080`)
-- `CORS_ALLOW_ORIGIN` (default: `*`)
+- `CORS_ALLOW_ORIGIN` (default: `*`; set to exact origin or comma-separated origin list in production)
 - `INGEST_API_KEY` (required)
 - `DATABASE_URL` (required, standard Postgres DSN)
 - `PG_MAX_CONNS` (default: `10`)
@@ -28,15 +28,29 @@ Minimal Go service for Enviro Station ingestion, streaming, and recent reads.
 ## Run locally
 
 ```bash
-INGEST_API_KEY='dev-ingest-key' \
-DATABASE_URL='postgres://postgres:postgres@localhost:5432/envirostation?sslmode=disable' \
+cd backend
+go run ./cmd/server
+```
+
+`cmd/server` auto-loads `.env.local` (and `.env` as fallback) when present.
+Environment variables already set in your shell take precedence.
+
+## Cloud configuration
+
+```bash
+INGEST_API_KEY='<secure-random-key>' \
+CORS_ALLOW_ORIGIN='https://dashboard.example.com' \
+DATABASE_URL='postgres://user:pass@db.example.com:5432/envirostation?sslmode=require' \
+OPENAI_API_KEY='<optional>' \
 go run ./cmd/server
 ```
 
 ## Example ingest
 
 ```bash
-curl -X POST http://localhost:8080/api/ingest \
+BACKEND_URL='https://api.example.com'
+
+curl -X POST "$BACKEND_URL/api/ingest" \
   -H 'content-type: application/json' \
   -H 'x-api-key: dev-ingest-key' \
   -d '{
@@ -56,7 +70,9 @@ curl -X POST http://localhost:8080/api/ingest \
 ## Example batch ingest
 
 ```bash
-curl -X POST http://localhost:8080/api/ingest/batch \
+BACKEND_URL='https://api.example.com'
+
+curl -X POST "$BACKEND_URL/api/ingest/batch" \
   -H 'content-type: application/json' \
   -H 'x-api-key: dev-ingest-key' \
   -d '[
@@ -70,8 +86,10 @@ curl -X POST http://localhost:8080/api/ingest/batch \
 Generate synthetic readings and post them to ingest:
 
 ```bash
+BACKEND_URL='https://api.example.com'
+
 go run ./cmd/simulator \
-  -url http://localhost:8080/api/ingest \
+  -url "$BACKEND_URL/api/ingest" \
   -api-key dev-ingest-key \
   -interval 2s
 ```
@@ -115,5 +133,6 @@ actionable insights (alerts, trend insights, and tips) with severity (`critical`
 Example:
 
 ```bash
-curl "http://localhost:8080/api/insights?analysis_limit=720&limit=4"
+BACKEND_URL='https://api.example.com'
+curl "$BACKEND_URL/api/insights?analysis_limit=720&limit=4"
 ```

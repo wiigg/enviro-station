@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +15,8 @@ import (
 )
 
 func main() {
+	loadLocalEnvFiles(".env.local", ".env")
+
 	port := envOrDefault("PORT", "8080")
 	ingestAPIKey := strings.TrimSpace(os.Getenv("INGEST_API_KEY"))
 	if ingestAPIKey == "" {
@@ -67,8 +71,9 @@ func main() {
 		Handler:           handler,
 		ReadTimeout:       15 * time.Second,
 		ReadHeaderTimeout: 5 * time.Second,
-		WriteTimeout:      15 * time.Second,
-		IdleTimeout:       60 * time.Second,
+		// Keep write timeout disabled so long-lived SSE streams can stay open.
+		WriteTimeout: 0,
+		IdleTimeout:  60 * time.Second,
 	}
 
 	log.Printf("ingest service listening on :%s", port)
@@ -78,8 +83,17 @@ func main() {
 }
 
 func withCORS(allowedOrigin string, next http.Handler) http.Handler {
+	allowedOrigins, allowAny := parseAllowedOrigins(allowedOrigin)
+
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		response.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
+		origin := strings.TrimSpace(request.Header.Get("Origin"))
+		if allowAny {
+			response.Header().Set("Access-Control-Allow-Origin", "*")
+		} else if origin != "" && originAllowed(origin, allowedOrigins) {
+			response.Header().Set("Access-Control-Allow-Origin", origin)
+			response.Header().Set("Vary", "Origin")
+		}
+
 		response.Header().Set("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
 		response.Header().Set("Access-Control-Allow-Headers", "Content-Type,X-API-Key")
 
@@ -90,6 +104,40 @@ func withCORS(allowedOrigin string, next http.Handler) http.Handler {
 
 		next.ServeHTTP(response, request)
 	})
+}
+
+func parseAllowedOrigins(raw string) ([]string, bool) {
+	value := strings.TrimSpace(raw)
+	if value == "" || value == "*" {
+		return nil, true
+	}
+
+	parts := strings.Split(value, ",")
+	origins := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		if trimmed == "*" {
+			return nil, true
+		}
+		origins = append(origins, trimmed)
+	}
+
+	if len(origins) == 0 {
+		return nil, true
+	}
+	return origins, false
+}
+
+func originAllowed(origin string, allowedOrigins []string) bool {
+	for _, allowedOrigin := range allowedOrigins {
+		if origin == allowedOrigin {
+			return true
+		}
+	}
+	return false
 }
 
 func envOrDefault(key string, fallback string) string {
@@ -111,4 +159,57 @@ func intOrDefault(key string, fallback int) int {
 		return fallback
 	}
 	return parsedValue
+}
+
+func loadLocalEnvFiles(paths ...string) {
+	for _, path := range paths {
+		if err := loadLocalEnvFile(path); err != nil {
+			log.Printf("warning: failed to load %s: %v", path, err)
+		}
+	}
+}
+
+func loadLocalEnvFile(path string) error {
+	fileHandle, err := os.Open(filepath.Clean(path))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer fileHandle.Close()
+
+	scanner := bufio.NewScanner(fileHandle)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		if strings.HasPrefix(line, "export ") {
+			line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
+		}
+
+		key, value, found := strings.Cut(line, "=")
+		if !found {
+			continue
+		}
+
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+
+		if _, alreadySet := os.LookupEnv(key); alreadySet {
+			continue
+		}
+
+		value = strings.TrimSpace(value)
+		value = strings.Trim(value, "\"'")
+		if err = os.Setenv(key, value); err != nil {
+			return err
+		}
+	}
+
+	return scanner.Err()
 }

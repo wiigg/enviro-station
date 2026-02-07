@@ -10,7 +10,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -o /out/enviro-ingest ./cmd/server
 
 FROM alpine:3.22
-RUN adduser -D -H -u 10001 appuser
+RUN apk add --no-cache ca-certificates && adduser -D -H -u 10001 appuser
 WORKDIR /app
 
 COPY --from=build /out/enviro-ingest /usr/local/bin/enviro-ingest

@@ -53,6 +53,19 @@ npm install
 npm run dev
 ```
 
+## Cloud Deployment Checklist
+
+- Backend:
+Set `INGEST_API_KEY`, `DATABASE_URL`, `CORS_ALLOW_ORIGIN`, and optional OpenAI insight variables.
+- Device:
+Set `BACKEND_BASE_URL` to your public API URL.
+- Dashboard:
+Set `VITE_BACKEND_URL` to your backend URL at build time, or host dashboard and backend on the same origin.
+- Local development:
+Use each service's `.env.local` for localhost defaults.
+- API base URL assumptions:
+Frontend uses same-origin by default in non-local environments, and switches to `http://localhost:8080` only for local Vite dev.
+
 ## Backend API (Current)
 
 - `POST /api/ingest` (requires `X-API-Key`)

@@ -1,6 +1,6 @@
 # Dashboard v2
 
-Phase 2 live integration for the Enviro Station dashboard rebuild.
+Modern dashboard for Enviro Station operations.
 
 ## Scope
 
@@ -16,8 +16,12 @@ Phase 2 live integration for the Enviro Station dashboard rebuild.
 ## Environment
 
 ```bash
-VITE_BACKEND_URL=http://localhost:8080
+VITE_BACKEND_URL=https://api.example.com
 ```
+
+If omitted in non-local deployments, the dashboard uses the current origin as backend base URL.
+For local Vite dev (`localhost:5173`), it automatically targets `http://localhost:8080`.
+For local development in this repo, `.env.local` is provided with localhost defaults.
 
 ## Run
 
