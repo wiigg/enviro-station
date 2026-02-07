@@ -5,11 +5,7 @@ description = "Enviro Station edge device runtime"
 requires-python = ">=3.13,<3.14"
 dependencies = [
   "python-dotenv>=1.2.1",
-  "pillow>=12.1.0",
   "smbus2>=0.6.0",
-  "st7735>=1.0.0",
-  "pms5003>=1.0.1",
-  "bme280>=0.7",
   "enviroplus>=1.0.2",
 ]
 

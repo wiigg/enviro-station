@@ -2,7 +2,7 @@
 Description=Enviro Station
 
 [Service]
-ExecStart=/home/<<USER>>/.virtualenvs/pimoroni/bin/python <<PATH_TO_DEVICE_PROGRAM>>
+ExecStart=<<WORKING_DIRECTORY>>/.venv/bin/python <<PATH_TO_DEVICE_PROGRAM>>
 WorkingDirectory=<<WORKING_DIRECTORY>>
 StandardOutput=inherit
 StandardError=inherit

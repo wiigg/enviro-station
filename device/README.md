@@ -14,40 +14,37 @@ The device service reads Enviro+ sensors and sends readings to the backend inges
 - `DEVICE_HTTP_TIMEOUT_SECONDS` (default: `5`)
 - `DEVICE_MAX_PENDING` (default: `5000`)
 
-## Run
+## Bootstrap (one-time per device)
 
 ```bash
-sudo apt update
-sudo apt install -y python3-enviroplus python3-pil python3-dotenv
-
 cd device
+./install.sh
 cp .env.local.example .env.local
-python3 main.py
 ```
 
-`main.py` loads `.env` and then `.env.local` (with `.env.local` overriding).
+`install.sh` installs required OS packages, configures Pi interfaces, installs `uv`,
+creates `device/.venv`, and runs `uv sync`.
 
+## Run manually
+
+```bash
+cd device
+source .venv/bin/activate
+python main.py
+```
+
+`main.py` loads configuration from `.env.local`.
 If the backend is unavailable, readings are queued locally and retried in batches.
 
 ## Auto-start on boot (systemd)
 
-1. Open `sensor.service.template`.
-2. Replace:
-- `<<PATH_TO_DEVICE_PROGRAM>>`
-- `<<WORKING_DIRECTORY>>`
-- `<<USER>>`
-3. Save as `/etc/systemd/system/sensor.service`.
-4. Ensure dependencies are installed (apt-first recommended above).
-5. Enable and start:
-
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable sensor.service
-sudo systemctl start sensor.service
+cd device
+./install_service.sh
 ```
 
-Check status:
+Check logs:
 
 ```bash
-sudo systemctl status sensor.service
+journalctl -u sensor.service -f
 ```
