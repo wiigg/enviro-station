@@ -1,0 +1,35 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: envirostation
+      POSTGRES_USER: envirostation
+      POSTGRES_PASSWORD: envirostation
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data-v18:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U envirostation -d envirostation"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  backend:
+    build:
+      context: .
+    environment:
+      PORT: 8080
+      CORS_ALLOW_ORIGIN: "*"
+      INGEST_API_KEY: dev-ingest-key
+      READ_API_KEY: dev-ingest-key
+      PG_MAX_CONNS: 10
+      DATABASE_URL: postgres://envirostation:envirostation@postgres:5432/envirostation?sslmode=disable
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres-data-v18:
