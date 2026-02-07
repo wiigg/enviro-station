@@ -2,14 +2,14 @@
 
 Enviro Station is an end-to-end air quality monitoring platform.
 
-It collects environmental readings from edge devices, persists them in PostgreSQL, and provides a backend API for realtime and historical access. The project is currently migrating to a cleaner, provider-agnostic architecture centered on Docker-friendly services.
+It collects environmental readings from edge devices, persists them in PostgreSQL, and provides a backend API for realtime and historical access.
 
 ## What It Includes
 
 - Edge device runtime for sensor collection on Raspberry Pi
 - Go backend for ingest, batch ingest, SSE streaming, and recent readings
 - PostgreSQL persistence via standard `DATABASE_URL` (works with local Postgres, Neon, or other managed providers)
-- New dashboard rebuild (`dashboard-v2`) in progress
+- Modern React dashboard (`dashboard-v2`)
 
 ## Current Architecture
 
@@ -23,10 +23,8 @@ It collects environmental readings from edge devices, persists them in PostgreSQ
 Go API service (ingest, batch ingest, stream, readings, health/readiness)
 - `device`:
 Sensor runtime and resilient transmitter (local queue + batch flush)
-- `dashboard`:
-Legacy dashboard (kept for reference during migration)
 - `dashboard-v2`:
-New dashboard foundation (Phase 1)
+Primary dashboard application
 
 ## Quick Start
 
@@ -47,7 +45,7 @@ cp .env.example .env
 python3 main.py
 ```
 
-### Dashboard v2 (Phase 1)
+### Dashboard
 
 ```bash
 cd dashboard-v2
@@ -61,12 +59,12 @@ npm run dev
 - `POST /api/ingest/batch` (requires `X-API-Key`)
 - `GET /api/stream` (SSE)
 - `GET /api/readings?limit=...`
+- `GET /api/insights?analysis_limit=...&limit=...`
 - `GET /health`
 - `GET /ready`
 
 ## Status
 
-- Azure Functions stack removed from active runtime
-- Device sender migrated off Azure IoT
-- Postgres-backed backend in place with migration support
-- Dashboard v2 started; data wiring and live views are next
+- Provider-agnostic backend and device runtime
+- Postgres-backed backend with migration support
+- Dashboard v2 with live charts, AI insights, and ops feed
