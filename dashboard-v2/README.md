@@ -23,6 +23,19 @@ If `VITE_BACKEND_URL` is unset:
 - `7d` is loaded on demand when selected and refreshed on a longer cache TTL.
 - Insights are cached in `sessionStorage` and revalidated in the background.
 
+## Container reverse proxy
+
+The production image serves static assets with Nginx and proxies `/api/*` to
+`API_UPSTREAM` at runtime.
+
+Example runtime env:
+
+```bash
+API_UPSTREAM=http://api.internal:8080
+```
+
+This keeps browser traffic same-origin while backend access stays server-side.
+
 ## Run
 
 ```bash
