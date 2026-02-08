@@ -18,10 +18,10 @@ import {
 const MAX_STREAM_POINTS = 10000;
 
 const WINDOW_OPTIONS = [
-  { id: "live", label: "Live", limit: 900 },
-  { id: "1h", label: "1h", limit: 3600 },
-  { id: "24h", label: "24h", limit: 10000 },
-  { id: "7d", label: "7d", limit: 10000 }
+  { id: "live", label: "Live", historyLimit: 900, insightsLimit: 900, chartPoints: 900 },
+  { id: "1h", label: "1h", historyLimit: 3600, insightsLimit: 3600, chartPoints: 1800 },
+  { id: "24h", label: "24h", historyLimit: 86400, insightsLimit: 5000, chartPoints: 7200 },
+  { id: "7d", label: "7d", historyLimit: 100000, insightsLimit: 5000, chartPoints: 7000 }
 ];
 
 const INSIGHT_POLL_INTERVAL_MS = 30000;
@@ -151,6 +151,15 @@ function computeTemperatureDomain(readings) {
   return [lower, upper];
 }
 
+function downsampleReadings(readings, maxPoints) {
+  if (!Array.isArray(readings) || readings.length <= maxPoints) {
+    return readings;
+  }
+
+  const stride = Math.ceil(readings.length / maxPoints);
+  return readings.filter((_, index) => index % stride === 0);
+}
+
 function normalizeInsight(rawInsight) {
   if (!rawInsight || typeof rawInsight !== "object") {
     return null;
@@ -243,7 +252,7 @@ export default function App() {
       setIsLoadingHistory(true);
 
       try {
-        const historyUrl = `${backendBaseUrl}/api/readings?limit=${selectedWindow.limit}`;
+        const historyUrl = `${backendBaseUrl}/api/readings?limit=${selectedWindow.historyLimit}`;
         const response = await fetch(historyUrl, { signal: abortController.signal });
         const payload = await parseJSONResponse(
           response,
@@ -291,8 +300,8 @@ export default function App() {
     addFeedItem,
     backendBaseUrl,
     selectedWindow.id,
+    selectedWindow.historyLimit,
     selectedWindow.label,
-    selectedWindow.limit
   ]);
 
   useEffect(() => {
@@ -394,7 +403,7 @@ export default function App() {
 
     async function loadInsights() {
       try {
-        const insightsUrl = `${backendBaseUrl}/api/insights?analysis_limit=${selectedWindow.limit}&limit=4`;
+        const insightsUrl = `${backendBaseUrl}/api/insights?analysis_limit=${selectedWindow.insightsLimit}&limit=4`;
         const response = await fetch(insightsUrl, { signal: abortController.signal });
         const payload = await parseJSONResponse(
           response,
@@ -450,25 +459,30 @@ export default function App() {
         window.clearTimeout(timer);
       }
     };
-  }, [backendBaseUrl, selectedWindow.limit]);
+  }, [backendBaseUrl, selectedWindow.insightsLimit]);
 
   const visibleReadings = useMemo(() => {
-    if (readings.length <= selectedWindow.limit) {
+    if (readings.length <= selectedWindow.historyLimit) {
       return readings;
     }
-    return readings.slice(readings.length - selectedWindow.limit);
-  }, [readings, selectedWindow.limit]);
+    return readings.slice(readings.length - selectedWindow.historyLimit);
+  }, [readings, selectedWindow.historyLimit]);
+
+  const chartReadings = useMemo(
+    () => downsampleReadings(visibleReadings, selectedWindow.chartPoints),
+    [visibleReadings, selectedWindow.chartPoints]
+  );
 
   const kpis = useMemo(() => buildKpis(visibleReadings), [visibleReadings]);
 
   const chartData = useMemo(
     () =>
-      visibleReadings.map((reading) => ({
+      chartReadings.map((reading) => ({
         timestamp: reading.timestamp,
         pm2: reading.pm2,
         temperature: reading.temperature
       })),
-    [visibleReadings]
+    [chartReadings]
   );
   const temperatureDomain = useMemo(
     () => computeTemperatureDomain(visibleReadings),

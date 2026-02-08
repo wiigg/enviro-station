@@ -15,6 +15,7 @@ const (
 	maxIngestBodyBytes = 1 << 20
 	maxBatchBodyBytes  = 4 << 20
 	maxBatchSize       = 1000
+	maxReadingsLimit   = 100000
 )
 
 type API struct {
@@ -168,8 +169,12 @@ func (api *API) handleReadings(response http.ResponseWriter, request *http.Reque
 	limit := 100
 	if rawLimit := request.URL.Query().Get("limit"); rawLimit != "" {
 		parsedLimit, err := strconv.Atoi(rawLimit)
-		if err != nil || parsedLimit < 1 || parsedLimit > 10000 {
-			writeError(response, http.StatusBadRequest, "limit must be between 1 and 10000")
+		if err != nil || parsedLimit < 1 || parsedLimit > maxReadingsLimit {
+			writeError(
+				response,
+				http.StatusBadRequest,
+				fmt.Sprintf("limit must be between 1 and %d", maxReadingsLimit),
+			)
 			return
 		}
 		limit = parsedLimit
