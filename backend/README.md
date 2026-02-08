@@ -61,6 +61,7 @@ Insights are precomputed in the backend, not generated per request.
 - Scheduled recompute at `OPENAI_INSIGHTS_REFRESH_INTERVAL`
 - Event-triggered recompute on significant PM threshold crossings or jumps
 - `/api/insights` returns the latest stored snapshot
+- Latest snapshot is persisted in Postgres and restored on backend restart
 
 ## Docker Compose (backend + postgres)
 

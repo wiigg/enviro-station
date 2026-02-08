@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"embed"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"path/filepath"
@@ -263,6 +265,70 @@ WHERE readings.id = expired.id
 	return result.RowsAffected(), nil
 }
 
+func (store *PostgresStore) SaveInsightsSnapshot(ctx context.Context, snapshot InsightsSnapshot) error {
+	insightsJSON, err := json.Marshal(snapshot.Insights)
+	if err != nil {
+		return err
+	}
+
+	const query = `
+INSERT INTO insights_snapshots (
+  snapshot_key, insights, source, generated_at, analyzed_samples, analysis_limit, trigger
+) VALUES ('latest', $1, $2, $3, $4, $5, $6)
+ON CONFLICT (snapshot_key) DO UPDATE SET
+  insights = EXCLUDED.insights,
+  source = EXCLUDED.source,
+  generated_at = EXCLUDED.generated_at,
+  analyzed_samples = EXCLUDED.analyzed_samples,
+  analysis_limit = EXCLUDED.analysis_limit,
+  trigger = EXCLUDED.trigger,
+  updated_at = NOW()
+`
+
+	_, err = store.pool.Exec(
+		ctx,
+		query,
+		insightsJSON,
+		snapshot.Source,
+		snapshot.GeneratedAt,
+		snapshot.AnalyzedSamples,
+		snapshot.AnalysisLimit,
+		snapshot.Trigger,
+	)
+	return err
+}
+
+func (store *PostgresStore) LatestInsightsSnapshot(ctx context.Context) (InsightsSnapshot, bool, error) {
+	const query = `
+SELECT insights, source, generated_at, analyzed_samples, analysis_limit, trigger
+FROM insights_snapshots
+WHERE snapshot_key = 'latest'
+`
+
+	var insightsJSON []byte
+	var snapshot InsightsSnapshot
+	err := store.pool.QueryRow(ctx, query).Scan(
+		&insightsJSON,
+		&snapshot.Source,
+		&snapshot.GeneratedAt,
+		&snapshot.AnalyzedSamples,
+		&snapshot.AnalysisLimit,
+		&snapshot.Trigger,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return InsightsSnapshot{}, false, nil
+		}
+		return InsightsSnapshot{}, false, err
+	}
+
+	if err = json.Unmarshal(insightsJSON, &snapshot.Insights); err != nil {
+		return InsightsSnapshot{}, false, err
+	}
+
+	return snapshot, true, nil
+}
+
 func (store *PostgresStore) Ping(ctx context.Context) error {
 	pingCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
@@ -274,3 +340,4 @@ func (store *PostgresStore) Close() {
 }
 
 var _ Store = (*PostgresStore)(nil)
+var _ InsightsSnapshotStore = (*PostgresStore)(nil)

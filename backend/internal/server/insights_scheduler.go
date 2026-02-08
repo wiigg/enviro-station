@@ -23,6 +23,11 @@ type InsightsEngine interface {
 	OnBatch(readings []SensorReading)
 }
 
+type InsightsSnapshotStore interface {
+	SaveInsightsSnapshot(ctx context.Context, snapshot InsightsSnapshot) error
+	LatestInsightsSnapshot(ctx context.Context) (InsightsSnapshot, bool, error)
+}
+
 type InsightsSchedulerConfig struct {
 	AnalysisLimit    int
 	RefreshInterval  time.Duration
@@ -48,9 +53,10 @@ func DefaultInsightsSchedulerConfig() InsightsSchedulerConfig {
 }
 
 type InsightsScheduler struct {
-	store    Store
-	analyzer AlertAnalyzer
-	config   InsightsSchedulerConfig
+	store         Store
+	snapshotStore InsightsSnapshotStore
+	analyzer      AlertAnalyzer
+	config        InsightsSchedulerConfig
 
 	mu               sync.RWMutex
 	snapshot         InsightsSnapshot
@@ -98,10 +104,17 @@ func NewInsightsScheduler(
 		store:    store,
 		analyzer: analyzer,
 		config:   cfg,
+		snapshotStore: func() InsightsSnapshotStore {
+			if snapshotStore, ok := store.(InsightsSnapshotStore); ok {
+				return snapshotStore
+			}
+			return nil
+		}(),
 	}
 }
 
 func (scheduler *InsightsScheduler) Start(ctx context.Context) {
+	scheduler.loadSnapshotFromStore()
 	scheduler.requestRecompute("startup")
 
 	go func() {
@@ -117,6 +130,35 @@ func (scheduler *InsightsScheduler) Start(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+func (scheduler *InsightsScheduler) loadSnapshotFromStore() {
+	if scheduler.snapshotStore == nil {
+		return
+	}
+
+	loadCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	snapshot, ok, err := scheduler.snapshotStore.LatestInsightsSnapshot(loadCtx)
+	if err != nil {
+		log.Printf("insights snapshot load failed: %v", err)
+		return
+	}
+	if !ok {
+		return
+	}
+
+	scheduler.mu.Lock()
+	scheduler.snapshot = snapshot
+	scheduler.hasSnapshot = true
+	scheduler.mu.Unlock()
+
+	log.Printf(
+		"insights snapshot restored source=%s generated_at=%d",
+		snapshot.Source,
+		snapshot.GeneratedAt,
+	)
 }
 
 func (scheduler *InsightsScheduler) Snapshot(limit int) (InsightsSnapshot, bool) {
@@ -250,6 +292,14 @@ func (scheduler *InsightsScheduler) recompute(trigger string) {
 	scheduler.snapshot = snapshot
 	scheduler.hasSnapshot = true
 	scheduler.mu.Unlock()
+
+	if scheduler.snapshotStore != nil {
+		saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := scheduler.snapshotStore.SaveInsightsSnapshot(saveCtx, snapshot); err != nil {
+			log.Printf("insights snapshot persist failed: %v", err)
+		}
+		cancel()
+	}
 
 	log.Printf(
 		"insights recomputed trigger=%s samples=%d insights=%d",
