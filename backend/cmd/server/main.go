@@ -51,17 +51,44 @@ func main() {
 		insightsModel := envOrDefault("OPENAI_INSIGHTS_MODEL", "gpt-5-mini")
 		insightsBaseURL := envOrDefault("OPENAI_BASE_URL", "https://api.openai.com/v1")
 		insightsMax := intOrDefault("OPENAI_INSIGHTS_MAX", 4)
-		insightsCacheSeconds := intOrDefault("OPENAI_INSIGHTS_CACHE_SECONDS", 30)
-		if insightsCacheSeconds < 30 {
-			insightsCacheSeconds = 30
-		}
-
-		alertAnalyzer := server.NewCachedAlertAnalyzer(
-			server.NewOpenAIAlertAnalyzer(openAIAPIKey, insightsModel, insightsBaseURL, insightsMax),
-			time.Duration(insightsCacheSeconds)*time.Second,
+		insightsAnalysisLimit := intOrDefault("OPENAI_INSIGHTS_ANALYSIS_LIMIT", 900)
+		insightsRefreshInterval := durationOrDefault("OPENAI_INSIGHTS_REFRESH_INTERVAL", time.Hour)
+		insightsEventMinInterval := durationOrDefault(
+			"OPENAI_INSIGHTS_EVENT_MIN_INTERVAL",
+			10*time.Minute,
 		)
-		options = append(options, server.WithAlertAnalyzer(alertAnalyzer))
-		log.Printf("ai insights enabled model=%s", insightsModel)
+		insightsPM2Trigger := floatOrDefault("OPENAI_INSIGHTS_PM2_TRIGGER", 15.0)
+		insightsPM10Trigger := floatOrDefault("OPENAI_INSIGHTS_PM10_TRIGGER", 45.0)
+		insightsPM2DeltaTrigger := floatOrDefault("OPENAI_INSIGHTS_PM2_DELTA_TRIGGER", 8.0)
+		insightsPM10DeltaTrigger := floatOrDefault("OPENAI_INSIGHTS_PM10_DELTA_TRIGGER", 15.0)
+		insightsAnalyzeTimeout := durationOrDefault("OPENAI_INSIGHTS_ANALYZE_TIMEOUT", 15*time.Second)
+
+		alertAnalyzer := server.NewOpenAIAlertAnalyzer(
+			openAIAPIKey,
+			insightsModel,
+			insightsBaseURL,
+			insightsMax,
+		)
+		options = append(
+			options,
+			server.WithAlertAnalyzer(alertAnalyzer),
+			server.WithInsightsSchedulerConfig(server.InsightsSchedulerConfig{
+				AnalysisLimit:    insightsAnalysisLimit,
+				RefreshInterval:  insightsRefreshInterval,
+				EventMinInterval: insightsEventMinInterval,
+				PM2Threshold:     insightsPM2Trigger,
+				PM10Threshold:    insightsPM10Trigger,
+				PM2DeltaTrigger:  insightsPM2DeltaTrigger,
+				PM10DeltaTrigger: insightsPM10DeltaTrigger,
+				AnalyzeTimeout:   insightsAnalyzeTimeout,
+			}),
+		)
+		log.Printf(
+			"ai insights enabled model=%s analysis_limit=%d refresh_interval=%s",
+			insightsModel,
+			insightsAnalysisLimit,
+			insightsRefreshInterval,
+		)
 	} else {
 		log.Printf("ai insights disabled (set OPENAI_API_KEY to enable)")
 	}
@@ -173,6 +200,19 @@ func durationOrDefault(key string, fallback time.Duration) time.Duration {
 
 	parsedValue, err := time.ParseDuration(value)
 	if err != nil || parsedValue <= 0 {
+		return fallback
+	}
+	return parsedValue
+}
+
+func floatOrDefault(key string, fallback float64) float64 {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+
+	parsedValue, err := strconv.ParseFloat(value, 64)
+	if err != nil {
 		return fallback
 	}
 	return parsedValue

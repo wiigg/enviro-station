@@ -18,10 +18,10 @@ import {
 const MAX_STREAM_POINTS = 100000;
 
 const WINDOW_OPTIONS = [
-  { id: "live", label: "Live", historyLimit: 900, insightsLimit: 900, chartPoints: 900 },
-  { id: "1h", label: "1h", historyLimit: 3600, insightsLimit: 3600, chartPoints: 1800 },
-  { id: "24h", label: "24h", historyLimit: 86400, insightsLimit: 5000, chartPoints: 7200 },
-  { id: "7d", label: "7d", historyLimit: 100000, insightsLimit: 5000, chartPoints: 7000 }
+  { id: "live", label: "Live", historyLimit: 900, chartPoints: 900 },
+  { id: "1h", label: "1h", historyLimit: 3600, chartPoints: 1800 },
+  { id: "24h", label: "24h", historyLimit: 86400, chartPoints: 7200 },
+  { id: "7d", label: "7d", historyLimit: 100000, chartPoints: 7000 }
 ];
 
 const INSIGHT_POLL_INTERVAL_MS = 30000;
@@ -403,7 +403,7 @@ export default function App() {
 
     async function loadInsights() {
       try {
-        const insightsUrl = `${backendBaseUrl}/api/insights?analysis_limit=${selectedWindow.insightsLimit}&limit=4`;
+        const insightsUrl = `${backendBaseUrl}/api/insights?limit=4`;
         const response = await fetch(insightsUrl, { signal: abortController.signal });
         const payload = await parseJSONResponse(
           response,
@@ -459,7 +459,7 @@ export default function App() {
         window.clearTimeout(timer);
       }
     };
-  }, [backendBaseUrl, selectedWindow.insightsLimit]);
+  }, [backendBaseUrl]);
 
   const visibleReadings = useMemo(() => {
     if (readings.length <= selectedWindow.historyLimit) {

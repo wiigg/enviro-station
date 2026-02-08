@@ -59,6 +59,6 @@ uv run python main.py
 - `POST /api/ingest/batch` (requires `X-API-Key`)
 - `GET /api/stream` (SSE)
 - `GET /api/readings?limit=...`
-- `GET /api/insights?analysis_limit=...&limit=...`
+- `GET /api/insights?limit=...`
 - `GET /health`
 - `GET /ready`

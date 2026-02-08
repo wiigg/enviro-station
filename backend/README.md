@@ -9,7 +9,7 @@ Ingest endpoints require `INGEST_API_KEY`; read endpoints are public in this ver
 - `POST /api/ingest/batch` (requires `X-API-Key`)
 - `GET /api/stream` (SSE)
 - `GET /api/readings?limit=100`
-- `GET /api/insights?analysis_limit=360&limit=4`
+- `GET /api/insights?limit=4`
 - `GET /health`
 - `GET /ready`
 
@@ -25,7 +25,14 @@ Ingest endpoints require `INGEST_API_KEY`; read endpoints are public in this ver
 - `OPENAI_INSIGHTS_MODEL` (default: `gpt-5-mini`)
 - `OPENAI_BASE_URL` (default: `https://api.openai.com/v1`)
 - `OPENAI_INSIGHTS_MAX` (default: `4`)
-- `OPENAI_INSIGHTS_CACHE_SECONDS` (default/minimum: `30`)
+- `OPENAI_INSIGHTS_ANALYSIS_LIMIT` (default: `900`)
+- `OPENAI_INSIGHTS_REFRESH_INTERVAL` (default: `1h`)
+- `OPENAI_INSIGHTS_EVENT_MIN_INTERVAL` (default: `10m`)
+- `OPENAI_INSIGHTS_PM2_TRIGGER` (default: `15`)
+- `OPENAI_INSIGHTS_PM10_TRIGGER` (default: `45`)
+- `OPENAI_INSIGHTS_PM2_DELTA_TRIGGER` (default: `8`)
+- `OPENAI_INSIGHTS_PM10_DELTA_TRIGGER` (default: `15`)
+- `OPENAI_INSIGHTS_ANALYZE_TIMEOUT` (default: `15s`)
 - `RETENTION_ENABLED` (default: `true`)
 - `RETENTION_DAYS` (default: `60`)
 - `RETENTION_BATCH_SIZE` (default: `5000`)
@@ -47,6 +54,13 @@ go run ./cmd/server
 
 Raw readings retention is managed automatically by the backend process.
 By default, readings older than 60 days are deleted in batches every 24 hours.
+
+## Insights generation model
+
+Insights are precomputed in the backend, not generated per request.
+- Scheduled recompute at `OPENAI_INSIGHTS_REFRESH_INTERVAL`
+- Event-triggered recompute on significant PM threshold crossings or jumps
+- `/api/insights` returns the latest stored snapshot
 
 ## Docker Compose (backend + postgres)
 

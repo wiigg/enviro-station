@@ -80,6 +80,27 @@ func (analyzer *fakeAlertAnalyzer) Source() string {
 	return analyzer.source
 }
 
+type fakeInsightsEngine struct {
+	snapshot InsightsSnapshot
+	ready    bool
+}
+
+func (engine *fakeInsightsEngine) Snapshot(limit int) (InsightsSnapshot, bool) {
+	if !engine.ready {
+		return InsightsSnapshot{}, false
+	}
+	snapshot := engine.snapshot
+	snapshot.Insights = cloneAlerts(snapshot.Insights)
+	if limit > 0 && len(snapshot.Insights) > limit {
+		snapshot.Insights = snapshot.Insights[:limit]
+	}
+	return snapshot, true
+}
+
+func (engine *fakeInsightsEngine) OnReading(_ SensorReading) {}
+
+func (engine *fakeInsightsEngine) OnBatch(_ []SensorReading) {}
+
 func TestHandleIngestRejectsUnauthorized(t *testing.T) {
 	store := &fakeStore{}
 	api := NewAPI(store, "secret")
@@ -285,42 +306,41 @@ func TestHandleAlertsReturnsServiceUnavailableWithoutAnalyzer(t *testing.T) {
 }
 
 func TestHandleAlertsReturnsAnalyzedAlerts(t *testing.T) {
-	store := &fakeStore{
-		latest: []SensorReading{
-			{Timestamp: 1738886400000, PM2: 3.2, PM10: 5.7, Temperature: 21.4, Humidity: 45},
-			{Timestamp: 1738886460000, PM2: 14.8, PM10: 22.1, Temperature: 24.2, Humidity: 58},
+	store := &fakeStore{}
+	engine := &fakeInsightsEngine{
+		ready: true,
+		snapshot: InsightsSnapshot{
+			Source:          "openai",
+			GeneratedAt:     1738886460123,
+			AnalyzedSamples: 100,
+			AnalysisLimit:   900,
+			Trigger:         "interval",
+			Insights: []Alert{
+				{
+					Kind:     "alert",
+					Severity: "warn",
+					Title:    "PM2.5 rising",
+					Message:  "PM2.5 is elevated compared with baseline.",
+				},
+				{
+					Kind:     "insight",
+					Severity: "info",
+					Title:    "Humidity climbing",
+					Message:  "Humidity is trending up over the last hour.",
+				},
+			},
 		},
 	}
-	analyzer := &fakeAlertAnalyzer{
-		source: "openai",
-		alerts: []Alert{
-			{
-				Kind:     "alert",
-				Severity: "warn",
-				Title:    "PM2.5 rising",
-				Message:  "PM2.5 is elevated compared with baseline.",
-			},
-			{
-				Kind:     "insight",
-				Severity: "info",
-				Title:    "Humidity climbing",
-				Message:  "Humidity is trending up over the last hour.",
-			},
-		},
-	}
-	api := NewAPI(store, "secret", WithAlertAnalyzer(analyzer))
+	api := NewAPI(store, "secret", WithInsightsEngine(engine))
 	handler := api.Handler()
 
-	request := httptest.NewRequest(http.MethodGet, "/api/insights?analysis_limit=100&limit=1", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/insights?limit=1", nil)
 	response := httptest.NewRecorder()
 
 	handler.ServeHTTP(response, request)
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, response.Code)
-	}
-	if analyzer.calls != 1 {
-		t.Fatalf("expected analyzer to be called once, got %d", analyzer.calls)
 	}
 
 	var payload struct {
@@ -345,14 +365,10 @@ func TestHandleAlertsReturnsAnalyzedAlerts(t *testing.T) {
 	}
 }
 
-func TestHandleAlertsReturnsBadGatewayWhenAnalyzerFails(t *testing.T) {
-	store := &fakeStore{
-		latest: []SensorReading{
-			{Timestamp: 1738886400000, PM2: 3.2, PM10: 5.7, Temperature: 21.4, Humidity: 45},
-		},
-	}
-	analyzer := &fakeAlertAnalyzer{err: errors.New("analyzer unavailable")}
-	api := NewAPI(store, "secret", WithAlertAnalyzer(analyzer))
+func TestHandleAlertsReturnsServiceUnavailableWhenSnapshotNotReady(t *testing.T) {
+	store := &fakeStore{}
+	engine := &fakeInsightsEngine{ready: false}
+	api := NewAPI(store, "secret", WithInsightsEngine(engine))
 	handler := api.Handler()
 
 	request := httptest.NewRequest(http.MethodGet, "/api/insights", nil)
@@ -360,24 +376,23 @@ func TestHandleAlertsReturnsBadGatewayWhenAnalyzerFails(t *testing.T) {
 
 	handler.ServeHTTP(response, request)
 
-	if response.Code != http.StatusBadGateway {
-		t.Fatalf("expected status %d, got %d", http.StatusBadGateway, response.Code)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status %d, got %d", http.StatusServiceUnavailable, response.Code)
 	}
 }
 
-func TestHandleInsightsRateLimit(t *testing.T) {
-	store := &fakeStore{
-		latest: []SensorReading{
-			{Timestamp: 1738886400000, PM2: 8.2, PM10: 14.7, Temperature: 22.1, Humidity: 47},
+func TestHandleInsightsNoRequestRateLimit(t *testing.T) {
+	store := &fakeStore{}
+	engine := &fakeInsightsEngine{
+		ready: true,
+		snapshot: InsightsSnapshot{
+			Source: "openai",
+			Insights: []Alert{
+				{Kind: "tip", Severity: "info", Title: "Ventilation tip", Message: "Open windows for 10 minutes."},
+			},
 		},
 	}
-	analyzer := &fakeAlertAnalyzer{
-		source: "openai",
-		alerts: []Alert{
-			{Kind: "tip", Severity: "info", Title: "Ventilation tip", Message: "Open windows for 10 minutes."},
-		},
-	}
-	api := NewAPI(store, "secret", WithAlertAnalyzer(analyzer))
+	api := NewAPI(store, "secret", WithInsightsEngine(engine))
 	handler := api.Handler()
 
 	for index := 0; index < 30; index++ {
@@ -394,7 +409,7 @@ func TestHandleInsightsRateLimit(t *testing.T) {
 	request.RemoteAddr = "203.0.113.2:5050"
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusTooManyRequests {
-		t.Fatalf("expected status %d, got %d", http.StatusTooManyRequests, response.Code)
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, response.Code)
 	}
 }

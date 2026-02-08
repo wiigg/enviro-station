@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -19,12 +20,13 @@ const (
 )
 
 type API struct {
-	store         Store
-	ingestAPIKey  string
-	trustProxyIP  bool
-	stream        *streamHub
-	alertAnalyzer AlertAnalyzer
-	insightsRate  *requestLimiter
+	store                   Store
+	ingestAPIKey            string
+	trustProxyIP            bool
+	stream                  *streamHub
+	alertAnalyzer           AlertAnalyzer
+	insightsEngine          InsightsEngine
+	insightsSchedulerConfig InsightsSchedulerConfig
 }
 
 type APIOption func(*API)
@@ -32,6 +34,18 @@ type APIOption func(*API)
 func WithAlertAnalyzer(analyzer AlertAnalyzer) APIOption {
 	return func(api *API) {
 		api.alertAnalyzer = analyzer
+	}
+}
+
+func WithInsightsEngine(engine InsightsEngine) APIOption {
+	return func(api *API) {
+		api.insightsEngine = engine
+	}
+}
+
+func WithInsightsSchedulerConfig(config InsightsSchedulerConfig) APIOption {
+	return func(api *API) {
+		api.insightsSchedulerConfig = config
 	}
 }
 
@@ -44,14 +58,21 @@ func WithTrustProxyIP(enabled bool) APIOption {
 func NewAPI(store Store, ingestAPIKey string, options ...APIOption) *API {
 	normalizedIngestAPIKey := strings.TrimSpace(ingestAPIKey)
 	api := &API{
-		store:        store,
-		ingestAPIKey: normalizedIngestAPIKey,
-		stream:       newStreamHub(),
-		insightsRate: newRequestLimiter(30, time.Minute),
+		store:                   store,
+		ingestAPIKey:            normalizedIngestAPIKey,
+		stream:                  newStreamHub(),
+		insightsSchedulerConfig: DefaultInsightsSchedulerConfig(),
 	}
 	for _, option := range options {
 		option(api)
 	}
+
+	if api.insightsEngine == nil && api.alertAnalyzer != nil {
+		scheduler := NewInsightsScheduler(store, api.alertAnalyzer, api.insightsSchedulerConfig)
+		scheduler.Start(context.Background())
+		api.insightsEngine = scheduler
+	}
+
 	return api
 }
 
@@ -119,6 +140,9 @@ func (api *API) handleIngest(response http.ResponseWriter, request *http.Request
 	}
 
 	api.stream.publish(reading)
+	if api.insightsEngine != nil {
+		api.insightsEngine.OnReading(reading)
+	}
 	writeJSON(response, http.StatusAccepted, map[string]string{"status": "accepted"})
 }
 
@@ -152,6 +176,9 @@ func (api *API) handleIngestBatch(response http.ResponseWriter, request *http.Re
 
 	for _, reading := range readings {
 		api.stream.publish(reading)
+	}
+	if api.insightsEngine != nil {
+		api.insightsEngine.OnBatch(readings)
 	}
 
 	writeJSON(response, http.StatusAccepted, map[string]any{
@@ -240,24 +267,9 @@ func (api *API) handleInsights(response http.ResponseWriter, request *http.Reque
 		return
 	}
 
-	if api.alertAnalyzer == nil {
-		writeError(response, http.StatusServiceUnavailable, "insights analyzer is not configured")
+	if api.insightsEngine == nil {
+		writeError(response, http.StatusServiceUnavailable, "insights engine is not configured")
 		return
-	}
-
-	if !api.insightsRate.Allow(clientIdentity(request, api.trustProxyIP), time.Now()) {
-		writeError(response, http.StatusTooManyRequests, "insights rate limit exceeded")
-		return
-	}
-
-	analysisLimit := 360
-	if rawAnalysisLimit := request.URL.Query().Get("analysis_limit"); rawAnalysisLimit != "" {
-		parsedAnalysisLimit, err := strconv.Atoi(rawAnalysisLimit)
-		if err != nil || parsedAnalysisLimit < 30 || parsedAnalysisLimit > 5000 {
-			writeError(response, http.StatusBadRequest, "analysis_limit must be between 30 and 5000")
-			return
-		}
-		analysisLimit = parsedAnalysisLimit
 	}
 
 	alertLimit := 4
@@ -270,27 +282,19 @@ func (api *API) handleInsights(response http.ResponseWriter, request *http.Reque
 		alertLimit = parsedLimit
 	}
 
-	readings, err := api.store.Latest(request.Context(), analysisLimit)
-	if err != nil {
-		writeError(response, http.StatusInternalServerError, "failed to read data")
+	snapshot, ok := api.insightsEngine.Snapshot(alertLimit)
+	if !ok {
+		writeError(response, http.StatusServiceUnavailable, "insights are warming up")
 		return
-	}
-
-	alerts, err := api.alertAnalyzer.Analyze(request.Context(), readings)
-	if err != nil {
-		writeError(response, http.StatusBadGateway, "failed to analyze insights")
-		return
-	}
-
-	if len(alerts) > alertLimit {
-		alerts = alerts[:alertLimit]
 	}
 
 	writeJSON(response, http.StatusOK, map[string]any{
-		"insights":         alerts,
-		"source":           api.alertAnalyzer.Source(),
-		"generated_at":     time.Now().UnixMilli(),
-		"analyzed_samples": len(readings),
+		"insights":         snapshot.Insights,
+		"source":           snapshot.Source,
+		"generated_at":     snapshot.GeneratedAt,
+		"analyzed_samples": snapshot.AnalyzedSamples,
+		"analysis_limit":   snapshot.AnalysisLimit,
+		"trigger":          snapshot.Trigger,
 	})
 }
 
