@@ -15,7 +15,7 @@ import {
   normalizeReadings
 } from "./lib/readings";
 
-const MAX_STREAM_POINTS = 10000;
+const MAX_STREAM_POINTS = 100000;
 
 const WINDOW_OPTIONS = [
   { id: "live", label: "Live", historyLimit: 900, insightsLimit: 900, chartPoints: 900 },
