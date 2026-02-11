@@ -10,6 +10,7 @@ Ingest endpoints require `INGEST_API_KEY`; read endpoints are public in this ver
 - `GET /api/stream` (SSE)
 - `GET /api/readings?limit=100`
 - `GET /api/insights?limit=4`
+- `GET /api/ops/events?limit=30`
 - `GET /health`
 - `GET /ready`
 
@@ -21,6 +22,8 @@ Ingest endpoints require `INGEST_API_KEY`; read endpoints are public in this ver
 - `DATABASE_URL` (required)
 - `PG_MAX_CONNS` (default: `10`)
 - `TRUST_PROXY_HEADERS` (default: `false`)
+- `OPS_DEVICE_OFFLINE_TIMEOUT` (default: `45s`)
+- `OPS_MONITOR_INTERVAL` (default: `5s`)
 - `OPENAI_API_KEY` (optional; enables `/api/insights`)
 - `OPENAI_INSIGHTS_MODEL` (default: `gpt-5-mini`)
 - `OPENAI_BASE_URL` (default: `https://api.openai.com/v1`)
@@ -28,10 +31,10 @@ Ingest endpoints require `INGEST_API_KEY`; read endpoints are public in this ver
 - `OPENAI_INSIGHTS_ANALYSIS_LIMIT` (default: `900`)
 - `OPENAI_INSIGHTS_REFRESH_INTERVAL` (default: `1h`)
 - `OPENAI_INSIGHTS_EVENT_MIN_INTERVAL` (default: `10m`)
-- `OPENAI_INSIGHTS_PM2_TRIGGER` (default: `15`)
-- `OPENAI_INSIGHTS_PM10_TRIGGER` (default: `45`)
-- `OPENAI_INSIGHTS_PM2_DELTA_TRIGGER` (default: `8`)
-- `OPENAI_INSIGHTS_PM10_DELTA_TRIGGER` (default: `15`)
+- `OPENAI_INSIGHTS_PM2_TRIGGER` (default: `8`)
+- `OPENAI_INSIGHTS_PM10_TRIGGER` (default: `30`)
+- `OPENAI_INSIGHTS_PM2_DELTA_TRIGGER` (default: `3`)
+- `OPENAI_INSIGHTS_PM10_DELTA_TRIGGER` (default: `10`)
 - `OPENAI_INSIGHTS_ANALYZE_TIMEOUT` (default: `15s`)
 - `RETENTION_ENABLED` (default: `true`)
 - `RETENTION_DAYS` (default: `60`)

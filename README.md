@@ -60,5 +60,6 @@ uv run python main.py
 - `GET /api/stream` (SSE)
 - `GET /api/readings?limit=...`
 - `GET /api/insights?limit=...`
+- `GET /api/ops/events?limit=...`
 - `GET /health`
 - `GET /ready`

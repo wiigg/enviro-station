@@ -45,6 +45,10 @@ func main() {
 
 	options := make([]server.APIOption, 0, 1)
 	options = append(options, server.WithTrustProxyIP(boolOrDefault("TRUST_PROXY_HEADERS", false)))
+	options = append(options, server.WithOpsConfig(server.OpsConfig{
+		DeviceOfflineTimeout: durationOrDefault("OPS_DEVICE_OFFLINE_TIMEOUT", 45*time.Second),
+		MonitorInterval:      durationOrDefault("OPS_MONITOR_INTERVAL", 5*time.Second),
+	}))
 
 	openAIAPIKey := strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
 	if openAIAPIKey != "" {
@@ -57,10 +61,10 @@ func main() {
 			"OPENAI_INSIGHTS_EVENT_MIN_INTERVAL",
 			10*time.Minute,
 		)
-		insightsPM2Trigger := floatOrDefault("OPENAI_INSIGHTS_PM2_TRIGGER", 15.0)
-		insightsPM10Trigger := floatOrDefault("OPENAI_INSIGHTS_PM10_TRIGGER", 45.0)
-		insightsPM2DeltaTrigger := floatOrDefault("OPENAI_INSIGHTS_PM2_DELTA_TRIGGER", 8.0)
-		insightsPM10DeltaTrigger := floatOrDefault("OPENAI_INSIGHTS_PM10_DELTA_TRIGGER", 15.0)
+		insightsPM2Trigger := floatOrDefault("OPENAI_INSIGHTS_PM2_TRIGGER", 8.0)
+		insightsPM10Trigger := floatOrDefault("OPENAI_INSIGHTS_PM10_TRIGGER", 30.0)
+		insightsPM2DeltaTrigger := floatOrDefault("OPENAI_INSIGHTS_PM2_DELTA_TRIGGER", 3.0)
+		insightsPM10DeltaTrigger := floatOrDefault("OPENAI_INSIGHTS_PM10_DELTA_TRIGGER", 10.0)
 		insightsAnalyzeTimeout := durationOrDefault("OPENAI_INSIGHTS_ANALYZE_TIMEOUT", 15*time.Second)
 
 		alertAnalyzer := server.NewOpenAIAlertAnalyzer(

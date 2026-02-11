@@ -369,7 +369,7 @@ body {
 
 .feed li {
   display: grid;
-  grid-template-columns: 56px 1fr;
+  grid-template-columns: 118px 1fr;
   gap: 10px;
   border-top: 1px dashed var(--border);
   padding-top: 8px;

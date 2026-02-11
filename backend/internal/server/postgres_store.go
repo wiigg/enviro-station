@@ -329,6 +329,60 @@ WHERE snapshot_key = 'latest'
 	return snapshot, true, nil
 }
 
+func (store *PostgresStore) AddOpsEvent(ctx context.Context, event OpsEvent) error {
+	const query = `
+INSERT INTO ops_events (
+  timestamp, kind, title, detail
+) VALUES ($1, $2, $3, $4)
+`
+
+	_, err := store.pool.Exec(ctx, query, event.Timestamp, event.Kind, event.Title, event.Detail)
+	return err
+}
+
+func (store *PostgresStore) LatestOpsEvents(ctx context.Context, limit int) ([]OpsEvent, error) {
+	if limit <= 0 {
+		limit = 30
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	const query = `
+SELECT id, timestamp, kind, title, detail
+FROM ops_events
+ORDER BY id DESC
+LIMIT $1
+`
+
+	rows, err := store.pool.Query(ctx, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	events := make([]OpsEvent, 0, limit)
+	for rows.Next() {
+		var event OpsEvent
+		if err = rows.Scan(
+			&event.ID,
+			&event.Timestamp,
+			&event.Kind,
+			&event.Title,
+			&event.Detail,
+		); err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return events, nil
+}
+
 func (store *PostgresStore) Ping(ctx context.Context) error {
 	pingCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
@@ -341,3 +395,4 @@ func (store *PostgresStore) Close() {
 
 var _ Store = (*PostgresStore)(nil)
 var _ InsightsSnapshotStore = (*PostgresStore)(nil)
+var _ OpsEventStore = (*PostgresStore)(nil)
