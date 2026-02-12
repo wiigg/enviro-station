@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"log"
-	"math"
 	"sync"
 	"time"
 )
@@ -46,8 +45,8 @@ func DefaultInsightsSchedulerConfig() InsightsSchedulerConfig {
 		EventMinInterval: 10 * time.Minute,
 		PM2Threshold:     8.0,
 		PM10Threshold:    30.0,
-		PM2DeltaTrigger:  3.0,
-		PM10DeltaTrigger: 10.0,
+		PM2DeltaTrigger:  5.0,
+		PM10DeltaTrigger: 15.0,
 		AnalyzeTimeout:   15 * time.Second,
 	}
 }
@@ -216,8 +215,8 @@ func (scheduler *InsightsScheduler) shouldTriggerFromReading(reading SensorReadi
 	pm10Crossed := previous.PM10 < scheduler.config.PM10Threshold &&
 		reading.PM10 >= scheduler.config.PM10Threshold
 
-	pm2Jumped := math.Abs(reading.PM2-previous.PM2) >= scheduler.config.PM2DeltaTrigger
-	pm10Jumped := math.Abs(reading.PM10-previous.PM10) >= scheduler.config.PM10DeltaTrigger
+	pm2Jumped := (reading.PM2 - previous.PM2) >= scheduler.config.PM2DeltaTrigger
+	pm10Jumped := (reading.PM10 - previous.PM10) >= scheduler.config.PM10DeltaTrigger
 
 	if !(pm2Crossed || pm10Crossed || pm2Jumped || pm10Jumped) {
 		return false

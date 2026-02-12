@@ -413,6 +413,66 @@ func TestHandleAlertsReturnsAnalyzedAlerts(t *testing.T) {
 	}
 }
 
+func TestHandleInsightsDefaultsToThreeItems(t *testing.T) {
+	store := &fakeStore{}
+	engine := &fakeInsightsEngine{
+		ready: true,
+		snapshot: InsightsSnapshot{
+			Source: "openai",
+			Insights: []Alert{
+				{Kind: "alert", Severity: "critical", Title: "A", Message: "A message"},
+				{Kind: "alert", Severity: "warn", Title: "B", Message: "B message"},
+				{Kind: "insight", Severity: "info", Title: "C", Message: "C message"},
+				{Kind: "tip", Severity: "info", Title: "D", Message: "D message"},
+			},
+		},
+	}
+	api := NewAPI(store, "secret", WithInsightsEngine(engine))
+	handler := api.Handler()
+
+	request := httptest.NewRequest(http.MethodGet, "/api/insights", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, response.Code)
+	}
+
+	var payload struct {
+		Insights []Alert `json:"insights"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+
+	if len(payload.Insights) != 3 {
+		t.Fatalf("expected default insights limit of 3, got %d", len(payload.Insights))
+	}
+}
+
+func TestHandleInsightsRejectsLimitAboveThree(t *testing.T) {
+	store := &fakeStore{}
+	engine := &fakeInsightsEngine{
+		ready: true,
+		snapshot: InsightsSnapshot{
+			Source: "openai",
+			Insights: []Alert{
+				{Kind: "tip", Severity: "info", Title: "A", Message: "A message"},
+			},
+		},
+	}
+	api := NewAPI(store, "secret", WithInsightsEngine(engine))
+	handler := api.Handler()
+
+	request := httptest.NewRequest(http.MethodGet, "/api/insights?limit=4", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, response.Code)
+	}
+}
+
 func TestHandleAlertsReturnsServiceUnavailableWhenSnapshotNotReady(t *testing.T) {
 	store := &fakeStore{}
 	engine := &fakeInsightsEngine{ready: false}

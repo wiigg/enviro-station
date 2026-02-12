@@ -95,10 +95,10 @@ func NewOpenAIAlertAnalyzer(apiKey string, model string, baseURL string, maxAler
 	}
 
 	if maxAlerts < 1 {
-		maxAlerts = 4
+		maxAlerts = maxInsightsLimit
 	}
-	if maxAlerts > 20 {
-		maxAlerts = 20
+	if maxAlerts > maxInsightsLimit {
+		maxAlerts = maxInsightsLimit
 	}
 
 	return &openAIAlertAnalyzer{

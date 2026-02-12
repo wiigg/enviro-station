@@ -54,7 +54,7 @@ func main() {
 	if openAIAPIKey != "" {
 		insightsModel := envOrDefault("OPENAI_INSIGHTS_MODEL", "gpt-5-mini")
 		insightsBaseURL := envOrDefault("OPENAI_BASE_URL", "https://api.openai.com/v1")
-		insightsMax := intOrDefault("OPENAI_INSIGHTS_MAX", 4)
+		insightsMax := intOrDefault("OPENAI_INSIGHTS_MAX", 3)
 		insightsAnalysisLimit := intOrDefault("OPENAI_INSIGHTS_ANALYSIS_LIMIT", 900)
 		insightsRefreshInterval := durationOrDefault("OPENAI_INSIGHTS_REFRESH_INTERVAL", time.Hour)
 		insightsEventMinInterval := durationOrDefault(
@@ -63,8 +63,8 @@ func main() {
 		)
 		insightsPM2Trigger := floatOrDefault("OPENAI_INSIGHTS_PM2_TRIGGER", 8.0)
 		insightsPM10Trigger := floatOrDefault("OPENAI_INSIGHTS_PM10_TRIGGER", 30.0)
-		insightsPM2DeltaTrigger := floatOrDefault("OPENAI_INSIGHTS_PM2_DELTA_TRIGGER", 3.0)
-		insightsPM10DeltaTrigger := floatOrDefault("OPENAI_INSIGHTS_PM10_DELTA_TRIGGER", 10.0)
+		insightsPM2DeltaTrigger := floatOrDefault("OPENAI_INSIGHTS_PM2_DELTA_TRIGGER", 5.0)
+		insightsPM10DeltaTrigger := floatOrDefault("OPENAI_INSIGHTS_PM10_DELTA_TRIGGER", 15.0)
 		insightsAnalyzeTimeout := durationOrDefault("OPENAI_INSIGHTS_ANALYZE_TIMEOUT", 15*time.Second)
 
 		alertAnalyzer := server.NewOpenAIAlertAnalyzer(

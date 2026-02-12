@@ -25,6 +25,7 @@ const WINDOW_OPTIONS = [
 ];
 
 const INSIGHT_POLL_INTERVAL_MS = 30000;
+const INSIGHT_MAX_ITEMS = 3;
 const OPS_FEED_POLL_INTERVAL_MS = 15000;
 const OPS_FEED_MAX_ITEMS = 6;
 
@@ -42,6 +43,10 @@ function resolveBackendBaseUrl() {
   const isLocalHost = hostname === "localhost" || hostname === "127.0.0.1";
   if (isLocalHost && (port === "5173" || port === "4173")) {
     return `${protocol}//${hostname}:8080`;
+  }
+
+  if (hostname === "envirostation-dashboard.fly.dev") {
+    return "https://envirostation-api.fly.dev";
   }
 
   return origin;
@@ -421,7 +426,7 @@ export default function App() {
 
     async function loadInsights() {
       try {
-        const insightsUrl = `${backendBaseUrl}/api/insights?limit=4`;
+        const insightsUrl = `${backendBaseUrl}/api/insights?limit=${INSIGHT_MAX_ITEMS}`;
         const response = await fetch(insightsUrl, { signal: abortController.signal });
         const payload = await parseJSONResponse(
           response,
@@ -450,7 +455,7 @@ export default function App() {
 
         const nextInsights = sourceData.map(normalizeInsight).filter(Boolean);
 
-        setInsights(nextInsights);
+        setInsights(nextInsights.slice(0, INSIGHT_MAX_ITEMS));
         setInsightSource(typeof payload.source === "string" ? payload.source : "openai");
         setInsightsError("");
       } catch (error) {

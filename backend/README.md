@@ -9,7 +9,7 @@ Ingest endpoints require `INGEST_API_KEY`; read endpoints are public in this ver
 - `POST /api/ingest/batch` (requires `X-API-Key`)
 - `GET /api/stream` (SSE)
 - `GET /api/readings?limit=100`
-- `GET /api/insights?limit=4`
+- `GET /api/insights?limit=3`
 - `GET /api/ops/events?limit=30`
 - `GET /health`
 - `GET /ready`
@@ -27,14 +27,14 @@ Ingest endpoints require `INGEST_API_KEY`; read endpoints are public in this ver
 - `OPENAI_API_KEY` (optional; enables `/api/insights`)
 - `OPENAI_INSIGHTS_MODEL` (default: `gpt-5-mini`)
 - `OPENAI_BASE_URL` (default: `https://api.openai.com/v1`)
-- `OPENAI_INSIGHTS_MAX` (default: `4`)
+- `OPENAI_INSIGHTS_MAX` (default: `3`; hard-capped at `3`)
 - `OPENAI_INSIGHTS_ANALYSIS_LIMIT` (default: `900`)
 - `OPENAI_INSIGHTS_REFRESH_INTERVAL` (default: `1h`)
 - `OPENAI_INSIGHTS_EVENT_MIN_INTERVAL` (default: `10m`)
 - `OPENAI_INSIGHTS_PM2_TRIGGER` (default: `8`)
 - `OPENAI_INSIGHTS_PM10_TRIGGER` (default: `30`)
-- `OPENAI_INSIGHTS_PM2_DELTA_TRIGGER` (default: `3`)
-- `OPENAI_INSIGHTS_PM10_DELTA_TRIGGER` (default: `10`)
+- `OPENAI_INSIGHTS_PM2_DELTA_TRIGGER` (default: `5`; upward jump threshold)
+- `OPENAI_INSIGHTS_PM10_DELTA_TRIGGER` (default: `15`; upward jump threshold)
 - `OPENAI_INSIGHTS_ANALYZE_TIMEOUT` (default: `15s`)
 - `RETENTION_ENABLED` (default: `true`)
 - `RETENTION_DAYS` (default: `60`)
