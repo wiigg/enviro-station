@@ -26,6 +26,7 @@ const WINDOW_OPTIONS = [
 
 const INSIGHT_POLL_INTERVAL_MS = 30000;
 const INSIGHT_MAX_ITEMS = 3;
+const INSIGHT_CACHE_KEY = "envirostation.insights.v1";
 const OPS_FEED_POLL_INTERVAL_MS = 15000;
 const OPS_FEED_MAX_ITEMS = 6;
 
@@ -226,6 +227,64 @@ function normalizeInsight(rawInsight) {
   };
 }
 
+function readInsightsCache(backendBaseUrl) {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const cachedRaw = window.sessionStorage.getItem(INSIGHT_CACHE_KEY);
+    if (!cachedRaw) {
+      return null;
+    }
+
+    const cached = JSON.parse(cachedRaw);
+    if (!cached || typeof cached !== "object") {
+      return null;
+    }
+
+    const cachedBackendBaseUrl =
+      typeof cached.backend_base_url === "string" ? cached.backend_base_url : "";
+    if (cachedBackendBaseUrl !== backendBaseUrl) {
+      return null;
+    }
+
+    const cachedSource = typeof cached.source === "string" ? cached.source : "openai";
+    const cachedInsightsRaw = Array.isArray(cached.insights) ? cached.insights : [];
+    const cachedInsights = cachedInsightsRaw
+      .map(normalizeInsight)
+      .filter(Boolean)
+      .slice(0, INSIGHT_MAX_ITEMS);
+
+    return {
+      source: cachedSource,
+      insights: cachedInsights
+    };
+  } catch (_error) {
+    return null;
+  }
+}
+
+function writeInsightsCache(backendBaseUrl, source, generatedAt, insights) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.sessionStorage.setItem(
+      INSIGHT_CACHE_KEY,
+      JSON.stringify({
+        backend_base_url: backendBaseUrl,
+        source,
+        generated_at: generatedAt,
+        insights
+      })
+    );
+  } catch (_error) {
+    // Ignore cache write failures.
+  }
+}
+
 function insightSeverityClassName(severity) {
   if (severity === "critical") {
     return "insightSeverityCritical";
@@ -258,16 +317,22 @@ function insightKindLabel(kind) {
 
 export default function App() {
   const backendBaseUrl = useMemo(() => resolveBackendBaseUrl(), []);
+  const initialInsightsCache = useMemo(
+    () => readInsightsCache(backendBaseUrl),
+    [backendBaseUrl]
+  );
 
   const [windowId, setWindowId] = useState("live");
   const [readings, setReadings] = useState([]);
   const [connectionStatus, setConnectionStatus] = useState("connecting");
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [lastError, setLastError] = useState("");
-  const [insights, setInsights] = useState([]);
+  const [insights, setInsights] = useState(initialInsightsCache?.insights ?? []);
   const [insightsError, setInsightsError] = useState("");
-  const [isLoadingInsights, setIsLoadingInsights] = useState(true);
-  const [insightSource, setInsightSource] = useState("openai");
+  const [isLoadingInsights, setIsLoadingInsights] = useState(
+    (initialInsightsCache?.insights?.length ?? 0) === 0
+  );
+  const [insightSource, setInsightSource] = useState(initialInsightsCache?.source ?? "openai");
   const [feedItems, setFeedItems] = useState([]);
   const [feedError, setFeedError] = useState("");
   const [isLoadingFeed, setIsLoadingFeed] = useState(true);
@@ -452,12 +517,23 @@ export default function App() {
         }
 
         const sourceData = Array.isArray(payload.insights) ? payload.insights : [];
+        const nextInsights = sourceData
+          .map(normalizeInsight)
+          .filter(Boolean)
+          .slice(0, INSIGHT_MAX_ITEMS);
+        const nextSource = typeof payload.source === "string" ? payload.source : "openai";
+        const generatedAtRaw = Number(payload.generated_at);
+        const generatedAt = Number.isFinite(generatedAtRaw) ? generatedAtRaw : 0;
 
-        const nextInsights = sourceData.map(normalizeInsight).filter(Boolean);
-
-        setInsights(nextInsights.slice(0, INSIGHT_MAX_ITEMS));
-        setInsightSource(typeof payload.source === "string" ? payload.source : "openai");
+        setInsights(nextInsights);
+        setInsightSource(nextSource);
         setInsightsError("");
+        writeInsightsCache(
+          backendBaseUrl,
+          nextSource,
+          generatedAt,
+          nextInsights
+        );
       } catch (error) {
         if (closed || abortController.signal.aborted) {
           return;
@@ -742,10 +818,8 @@ export default function App() {
                 <h2>AI Insights</h2>
                 <span>{insightSource}</span>
               </div>
-              {isLoadingInsights || isLoadingHistory ? (
+              {isLoadingInsights && insights.length === 0 ? (
                 <p className="emptyState">Analyzing latest readings...</p>
-              ) : insightsError ? (
-                <p className="emptyState alertError">{insightsError}</p>
               ) : insights.length ? (
                 <ul className="insightList">
                   {insights.map((insight) => (
@@ -763,6 +837,8 @@ export default function App() {
                     </li>
                   ))}
                 </ul>
+              ) : insightsError ? (
+                <p className="emptyState alertError">{insightsError}</p>
               ) : (
                 <p className="emptyState">
                   No active insights for the selected window.
