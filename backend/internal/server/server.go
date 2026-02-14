@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -17,6 +19,7 @@ const (
 	maxBatchBodyBytes  = 4 << 20
 	maxBatchSize       = 1000
 	maxReadingsLimit   = 100000
+	maxOpsEventsLimit  = 200
 )
 
 type API struct {
@@ -27,6 +30,13 @@ type API struct {
 	alertAnalyzer           AlertAnalyzer
 	insightsEngine          InsightsEngine
 	insightsSchedulerConfig InsightsSchedulerConfig
+	opsEventStore           OpsEventStore
+	opsConfig               OpsConfig
+
+	opsMu            sync.Mutex
+	deviceStateKnown bool
+	deviceConnected  bool
+	lastDeviceSeenAt time.Time
 }
 
 type APIOption func(*API)
@@ -55,6 +65,12 @@ func WithTrustProxyIP(enabled bool) APIOption {
 	}
 }
 
+func WithOpsConfig(config OpsConfig) APIOption {
+	return func(api *API) {
+		api.opsConfig = config
+	}
+}
+
 func NewAPI(store Store, ingestAPIKey string, options ...APIOption) *API {
 	normalizedIngestAPIKey := strings.TrimSpace(ingestAPIKey)
 	api := &API{
@@ -62,6 +78,7 @@ func NewAPI(store Store, ingestAPIKey string, options ...APIOption) *API {
 		ingestAPIKey:            normalizedIngestAPIKey,
 		stream:                  newStreamHub(),
 		insightsSchedulerConfig: DefaultInsightsSchedulerConfig(),
+		opsConfig:               DefaultOpsConfig(),
 	}
 	for _, option := range options {
 		option(api)
@@ -71,6 +88,18 @@ func NewAPI(store Store, ingestAPIKey string, options ...APIOption) *API {
 		scheduler := NewInsightsScheduler(store, api.alertAnalyzer, api.insightsSchedulerConfig)
 		scheduler.Start(context.Background())
 		api.insightsEngine = scheduler
+	}
+
+	if opsStore, ok := store.(OpsEventStore); ok {
+		api.opsEventStore = opsStore
+		api.initializeDeviceState()
+		api.startDeviceMonitor(context.Background())
+		api.persistOpsEvent(
+			"backend_restarted",
+			"Backend restarted",
+			"Ops event monitoring is active.",
+			time.Now().UnixMilli(),
+		)
 	}
 
 	return api
@@ -85,6 +114,7 @@ func (api *API) Handler() http.Handler {
 	mux.HandleFunc("/api/readings", api.handleReadings)
 	mux.HandleFunc("/api/stream", api.handleStream)
 	mux.HandleFunc("/api/insights", api.handleInsights)
+	mux.HandleFunc("/api/ops/events", api.handleOpsEvents)
 	return mux
 }
 
@@ -139,6 +169,7 @@ func (api *API) handleIngest(response http.ResponseWriter, request *http.Request
 		return
 	}
 
+	api.onTelemetryReceived(time.Now())
 	api.stream.publish(reading)
 	if api.insightsEngine != nil {
 		api.insightsEngine.OnReading(reading)
@@ -174,6 +205,9 @@ func (api *API) handleIngestBatch(response http.ResponseWriter, request *http.Re
 		return
 	}
 
+	if len(readings) > 0 {
+		api.onTelemetryReceived(time.Now())
+	}
 	for _, reading := range readings {
 		api.stream.publish(reading)
 	}
@@ -298,6 +332,40 @@ func (api *API) handleInsights(response http.ResponseWriter, request *http.Reque
 	})
 }
 
+func (api *API) handleOpsEvents(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		writeError(response, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	if api.opsEventStore == nil {
+		writeJSON(response, http.StatusOK, map[string]any{"events": []OpsEvent{}})
+		return
+	}
+
+	limit := 30
+	if rawLimit := request.URL.Query().Get("limit"); rawLimit != "" {
+		parsedLimit, err := strconv.Atoi(rawLimit)
+		if err != nil || parsedLimit < 1 || parsedLimit > maxOpsEventsLimit {
+			writeError(
+				response,
+				http.StatusBadRequest,
+				fmt.Sprintf("limit must be between 1 and %d", maxOpsEventsLimit),
+			)
+			return
+		}
+		limit = parsedLimit
+	}
+
+	events, err := api.opsEventStore.LatestOpsEvents(request.Context(), limit)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "failed to load ops events")
+		return
+	}
+
+	writeJSON(response, http.StatusOK, map[string]any{"events": events})
+}
+
 func (api *API) authorizeIngestRequest(response http.ResponseWriter, request *http.Request) bool {
 	providedKey := request.Header.Get("X-API-Key")
 	if subtle.ConstantTimeCompare([]byte(providedKey), []byte(api.ingestAPIKey)) != 1 {
@@ -305,6 +373,134 @@ func (api *API) authorizeIngestRequest(response http.ResponseWriter, request *ht
 		return false
 	}
 	return true
+}
+
+func (api *API) initializeDeviceState() {
+	if api.opsEventStore == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	events, err := api.opsEventStore.LatestOpsEvents(ctx, 20)
+	if err != nil {
+		log.Printf("ops events initialization failed: %v", err)
+		return
+	}
+	for _, event := range events {
+		lastEventTime := time.UnixMilli(event.Timestamp)
+
+		api.opsMu.Lock()
+		switch event.Kind {
+		case "device_connected":
+			api.deviceStateKnown = true
+			api.deviceConnected = true
+			api.lastDeviceSeenAt = lastEventTime
+			api.opsMu.Unlock()
+			return
+		case "device_disconnected":
+			api.deviceStateKnown = true
+			api.deviceConnected = false
+			api.lastDeviceSeenAt = lastEventTime
+			api.opsMu.Unlock()
+			return
+		default:
+			api.opsMu.Unlock()
+		}
+	}
+}
+
+func (api *API) startDeviceMonitor(ctx context.Context) {
+	if api.opsEventStore == nil {
+		return
+	}
+	if api.opsConfig.DeviceOfflineTimeout <= 0 || api.opsConfig.MonitorInterval <= 0 {
+		return
+	}
+
+	go func() {
+		ticker := time.NewTicker(api.opsConfig.MonitorInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-ticker.C:
+				api.evaluateDeviceDisconnect(now)
+			}
+		}
+	}()
+}
+
+func (api *API) onTelemetryReceived(observedAt time.Time) {
+	if api.opsEventStore == nil {
+		return
+	}
+
+	shouldLogConnected := false
+
+	api.opsMu.Lock()
+	if !api.deviceStateKnown || !api.deviceConnected {
+		shouldLogConnected = true
+	}
+	api.deviceStateKnown = true
+	api.deviceConnected = true
+	api.lastDeviceSeenAt = observedAt
+	api.opsMu.Unlock()
+
+	if shouldLogConnected {
+		api.persistOpsEvent(
+			"device_connected",
+			"Device connected",
+			"Telemetry ingest resumed.",
+			observedAt.UnixMilli(),
+		)
+	}
+}
+
+func (api *API) evaluateDeviceDisconnect(now time.Time) {
+	shouldLogDisconnected := false
+
+	api.opsMu.Lock()
+	if api.deviceStateKnown &&
+		api.deviceConnected &&
+		!api.lastDeviceSeenAt.IsZero() &&
+		now.Sub(api.lastDeviceSeenAt) >= api.opsConfig.DeviceOfflineTimeout {
+		api.deviceConnected = false
+		shouldLogDisconnected = true
+	}
+	api.opsMu.Unlock()
+
+	if shouldLogDisconnected {
+		api.persistOpsEvent(
+			"device_disconnected",
+			"Device disconnected",
+			fmt.Sprintf("No telemetry received for %s.", api.opsConfig.DeviceOfflineTimeout),
+			now.UnixMilli(),
+		)
+	}
+}
+
+func (api *API) persistOpsEvent(kind string, title string, detail string, timestamp int64) {
+	if api.opsEventStore == nil {
+		return
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+
+		if err := api.opsEventStore.AddOpsEvent(ctx, OpsEvent{
+			Timestamp: timestamp,
+			Kind:      kind,
+			Title:     title,
+			Detail:    detail,
+		}); err != nil {
+			log.Printf("ops event persist failed kind=%s: %v", kind, err)
+		}
+	}()
 }
 
 func writeJSON(response http.ResponseWriter, statusCode int, payload any) {

@@ -12,8 +12,10 @@ const NUMERIC_FIELDS = [
 ];
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const WEEK_MS = 7 * DAY_MS;
 const HOUR_MS = 60 * 60 * 1000;
 const NEARBY_YESTERDAY_WINDOW_MS = 90 * 60 * 1000;
+const NEARBY_LAST_WEEK_WINDOW_MS = 12 * HOUR_MS;
 const MIN_BUCKET_SAMPLES = 3;
 
 export function normalizeReading(raw) {
@@ -52,7 +54,7 @@ export function appendReading(readings, reading, maxPoints) {
   return next.slice(next.length - maxPoints);
 }
 
-export function buildKpis(readings) {
+export function buildKpis(readings, windowId = "live") {
   const latest = readings[readings.length - 1];
 
   if (!latest) {
@@ -71,28 +73,28 @@ export function buildKpis(readings) {
       label: "PM2.5",
       value: latest.pm2.toFixed(1),
       unit: "ug/m3",
-      trend: metricTrend(readings, samples, latest, "pm2", "ug/m3", 1),
+      trend: metricTrend(readings, samples, latest, "pm2", "ug/m3", 1, windowId),
       state: severityForPM25(latest.pm2)
     },
     {
       label: "PM10",
       value: latest.pm10.toFixed(1),
       unit: "ug/m3",
-      trend: metricTrend(readings, samples, latest, "pm10", "ug/m3", 1),
+      trend: metricTrend(readings, samples, latest, "pm10", "ug/m3", 1, windowId),
       state: severityForPM10(latest.pm10)
     },
     {
       label: "Temp",
       value: latest.temperature.toFixed(1),
       unit: "C",
-      trend: metricTrend(readings, samples, latest, "temperature", "C", 1),
+      trend: metricTrend(readings, samples, latest, "temperature", "C", 1, windowId),
       state: "ok"
     },
     {
       label: "Humidity",
       value: latest.humidity.toFixed(0),
       unit: "%",
-      trend: metricTrend(readings, samples, latest, "humidity", "%", 0),
+      trend: metricTrend(readings, samples, latest, "humidity", "%", 0, windowId),
       state: "ok"
     }
   ];
@@ -112,37 +114,63 @@ function average(values) {
   return values.reduce((total, value) => total + value, 0) / values.length;
 }
 
-function metricTrend(readings, samples, latest, field, unit, decimals) {
-  const yesterdayHourBaseline = averageFieldInWindow(
-    readings,
-    startOfHour(latest.timestamp - DAY_MS),
-    startOfHour(latest.timestamp - DAY_MS) + HOUR_MS,
-    field
-  );
-
-  if (Number.isFinite(yesterdayHourBaseline)) {
-    return describeDelta(
-      latest[field] - yesterdayHourBaseline,
-      unit,
-      decimals,
-      "this hour yesterday"
+function metricTrend(readings, samples, latest, field, unit, decimals, windowId) {
+  if (windowId === "24h") {
+    const yesterdayHourBaseline = averageFieldInWindow(
+      readings,
+      startOfHour(latest.timestamp - DAY_MS),
+      startOfHour(latest.timestamp - DAY_MS) + HOUR_MS,
+      field
     );
+
+    if (Number.isFinite(yesterdayHourBaseline)) {
+      return describeDelta(latest[field] - yesterdayHourBaseline, unit, decimals, "yesterday");
+    }
+
+    const nearbyYesterdayBaseline = averageFieldInWindow(
+      readings,
+      latest.timestamp - DAY_MS - NEARBY_YESTERDAY_WINDOW_MS,
+      latest.timestamp - DAY_MS + NEARBY_YESTERDAY_WINDOW_MS,
+      field
+    );
+
+    if (Number.isFinite(nearbyYesterdayBaseline)) {
+      return describeDelta(latest[field] - nearbyYesterdayBaseline, unit, decimals, "yesterday");
+    }
   }
 
-  const nearbyYesterdayBaseline = averageFieldInWindow(
-    readings,
-    latest.timestamp - DAY_MS - NEARBY_YESTERDAY_WINDOW_MS,
-    latest.timestamp - DAY_MS + NEARBY_YESTERDAY_WINDOW_MS,
-    field
-  );
-
-  if (Number.isFinite(nearbyYesterdayBaseline)) {
-    return describeDelta(
-      latest[field] - nearbyYesterdayBaseline,
-      unit,
-      decimals,
-      "around this time yesterday"
+  if (windowId === "7d") {
+    const lastWeekHourBaseline = averageFieldInWindow(
+      readings,
+      startOfHour(latest.timestamp - WEEK_MS),
+      startOfHour(latest.timestamp - WEEK_MS) + HOUR_MS,
+      field
     );
+
+    if (Number.isFinite(lastWeekHourBaseline)) {
+      return describeDelta(
+        latest[field] - lastWeekHourBaseline,
+        unit,
+        decimals,
+        "same time last week"
+      );
+    }
+
+    const nearbyLastWeekBaseline = averageFieldInWindow(
+      readings,
+      latest.timestamp - WEEK_MS - NEARBY_LAST_WEEK_WINDOW_MS,
+      latest.timestamp - WEEK_MS + NEARBY_LAST_WEEK_WINDOW_MS,
+      field
+    );
+
+    if (Number.isFinite(nearbyLastWeekBaseline)) {
+      return describeDelta(
+        latest[field] - nearbyLastWeekBaseline,
+        unit,
+        decimals,
+        "same time last week"
+      );
+    }
   }
 
   const baseline = average(samples.map((item) => item[field]));

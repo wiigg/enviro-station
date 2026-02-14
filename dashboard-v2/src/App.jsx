@@ -25,6 +25,8 @@ const WINDOW_OPTIONS = [
 ];
 
 const INSIGHT_POLL_INTERVAL_MS = 30000;
+const OPS_FEED_POLL_INTERVAL_MS = 15000;
+const OPS_FEED_MAX_ITEMS = 6;
 
 function resolveBackendBaseUrl() {
   const env = import.meta.env.VITE_BACKEND_URL;
@@ -78,10 +80,41 @@ async function parseJSONResponse(response, endpointName, requestUrl, backendBase
   }
 }
 
-function buildFeedItem(title, detail) {
+function formatOpsEventTime(timestamp) {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  return date.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+function normalizeOpsEvent(rawEvent) {
+  if (!rawEvent || typeof rawEvent !== "object") {
+    return null;
+  }
+
+  const title = typeof rawEvent.title === "string" ? rawEvent.title.trim() : "";
+  const detail = typeof rawEvent.detail === "string" ? rawEvent.detail.trim() : "";
+  const timestampRaw =
+    typeof rawEvent.timestamp === "number" ? rawEvent.timestamp : Number(rawEvent.timestamp);
+  if (!title || !detail || !Number.isFinite(timestampRaw)) {
+    return null;
+  }
+
+  const idRaw = rawEvent.id;
+  const id =
+    typeof idRaw === "number" || typeof idRaw === "string"
+      ? String(idRaw)
+      : `${timestampRaw}-${title}-${detail}`.toLowerCase();
+
   return {
-    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    id,
+    time: formatOpsEventTime(timestampRaw),
     title,
     detail
   };
@@ -230,20 +263,16 @@ export default function App() {
   const [insightsError, setInsightsError] = useState("");
   const [isLoadingInsights, setIsLoadingInsights] = useState(true);
   const [insightSource, setInsightSource] = useState("openai");
-  const [feedItems, setFeedItems] = useState([
-    buildFeedItem("Dashboard started", "Waiting for backend history and realtime stream")
-  ]);
+  const [feedItems, setFeedItems] = useState([]);
+  const [feedError, setFeedError] = useState("");
+  const [isLoadingFeed, setIsLoadingFeed] = useState(true);
 
   const lastStreamEventAtRef = useRef(0);
-  const streamOpenedRef = useRef(false);
 
   const selectedWindow = useMemo(
     () => WINDOW_OPTIONS.find((windowOption) => windowOption.id === windowId) ?? WINDOW_OPTIONS[0],
     [windowId]
   );
-  const addFeedItem = useCallback((title, detail) => {
-    setFeedItems((previousItems) => [buildFeedItem(title, detail), ...previousItems].slice(0, 8));
-  }, []);
 
   useEffect(() => {
     const abortController = new AbortController();
@@ -272,10 +301,6 @@ export default function App() {
         const normalized = normalizeReadings(payload.readings);
         setReadings(normalized);
         setLastError("");
-        addFeedItem(
-          "History synced",
-          `${normalized.length} readings loaded for ${selectedWindow.label} window`
-        );
       } catch (error) {
         if (abortController.signal.aborted) {
           return;
@@ -283,7 +308,6 @@ export default function App() {
 
         const message = error instanceof Error ? error.message : "History request failed";
         setLastError(message);
-        addFeedItem("History load failed", message);
       } finally {
         if (!abortController.signal.aborted) {
           setIsLoadingHistory(false);
@@ -297,7 +321,6 @@ export default function App() {
       abortController.abort();
     };
   }, [
-    addFeedItem,
     backendBaseUrl,
     selectedWindow.id,
     selectedWindow.historyLimit,
@@ -344,10 +367,6 @@ export default function App() {
       eventSource.onopen = () => {
         setConnectionStatus("live");
         retryDelayMs = 1000;
-        if (!streamOpenedRef.current) {
-          addFeedItem("Stream connected", "Realtime updates are active");
-          streamOpenedRef.current = true;
-        }
       };
 
       eventSource.onerror = () => {
@@ -358,7 +377,6 @@ export default function App() {
         setConnectionStatus("degraded");
         const reconnectDelay = retryDelayMs;
         retryDelayMs = Math.min(retryDelayMs * 2, 15000);
-        addFeedItem("Stream interrupted", `Retrying in ${Math.round(reconnectDelay / 1000)}s`);
 
         eventSource.close();
         reconnectTimeout = setTimeout(connect, reconnectDelay);
@@ -376,7 +394,7 @@ export default function App() {
         eventSource.close();
       }
     };
-  }, [addFeedItem, backendBaseUrl]);
+  }, [backendBaseUrl]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -461,6 +479,68 @@ export default function App() {
     };
   }, [backendBaseUrl]);
 
+  useEffect(() => {
+    let closed = false;
+    let timer = null;
+    const abortController = new AbortController();
+
+    async function loadOpsFeed() {
+      try {
+        const opsFeedUrl = `${backendBaseUrl}/api/ops/events?limit=${OPS_FEED_MAX_ITEMS}`;
+        const response = await fetch(opsFeedUrl, { signal: abortController.signal });
+        const payload = await parseJSONResponse(
+          response,
+          "Ops feed endpoint",
+          opsFeedUrl,
+          backendBaseUrl
+        );
+
+        if (!response.ok) {
+          const errorMessage =
+            typeof payload.error === "string"
+              ? payload.error
+              : `ops feed request failed with status ${response.status}`;
+          console.warn("Ops feed request failed", {
+            status: response.status,
+            error: errorMessage
+          });
+          throw new Error("Ops log is currently unavailable.");
+        }
+
+        if (closed) {
+          return;
+        }
+
+        const sourceData = Array.isArray(payload.events) ? payload.events : [];
+        const normalized = sourceData.map(normalizeOpsEvent).filter(Boolean);
+        setFeedItems(normalized.slice(0, OPS_FEED_MAX_ITEMS));
+        setFeedError("");
+      } catch (error) {
+        if (closed || abortController.signal.aborted) {
+          return;
+        }
+        const diagnostic = error instanceof Error ? error.message : "failed to load ops feed";
+        console.error("Ops feed fetch error", diagnostic);
+        setFeedError("Ops log is currently unavailable.");
+      } finally {
+        if (!closed) {
+          setIsLoadingFeed(false);
+          timer = window.setTimeout(loadOpsFeed, OPS_FEED_POLL_INTERVAL_MS);
+        }
+      }
+    }
+
+    loadOpsFeed();
+
+    return () => {
+      closed = true;
+      abortController.abort();
+      if (timer) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, [backendBaseUrl]);
+
   const visibleReadings = useMemo(() => {
     if (readings.length <= selectedWindow.historyLimit) {
       return readings;
@@ -473,7 +553,7 @@ export default function App() {
     [visibleReadings, selectedWindow.chartPoints]
   );
 
-  const kpis = useMemo(() => buildKpis(visibleReadings), [visibleReadings]);
+  const kpis = useMemo(() => buildKpis(visibleReadings, windowId), [visibleReadings, windowId]);
 
   const chartData = useMemo(
     () =>
@@ -689,19 +769,27 @@ export default function App() {
             <aside className="card panel feed">
               <div className="panelHead">
                 <h2>Ops Feed</h2>
-                <span>History + stream events</span>
+                <span>Persisted backend events</span>
               </div>
-              <ul>
-                {feedItems.map((incident) => (
-                  <li key={incident.id}>
-                    <p className="time">{incident.time}</p>
-                    <div>
-                      <p className="event">{incident.title}</p>
-                      <p className="detail">{incident.detail}</p>
-                    </div>
-                  </li>
-                ))}
-              </ul>
+              {isLoadingFeed ? (
+                <p className="emptyState">Loading operations log...</p>
+              ) : feedError ? (
+                <p className="emptyState alertError">{feedError}</p>
+              ) : feedItems.length ? (
+                <ul>
+                  {feedItems.map((incident) => (
+                    <li key={incident.id}>
+                      <p className="time">{incident.time}</p>
+                      <div>
+                        <p className="event">{incident.title}</p>
+                        <p className="detail">{incident.detail}</p>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="emptyState">No operations events yet.</p>
+              )}
             </aside>
           </div>
         </section>

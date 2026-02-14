@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 type fakeStore struct {
@@ -100,6 +102,52 @@ func (engine *fakeInsightsEngine) Snapshot(limit int) (InsightsSnapshot, bool) {
 func (engine *fakeInsightsEngine) OnReading(_ SensorReading) {}
 
 func (engine *fakeInsightsEngine) OnBatch(_ []SensorReading) {}
+
+type fakeOpsStore struct {
+	*fakeStore
+	mu     sync.Mutex
+	events []OpsEvent
+}
+
+func (store *fakeOpsStore) AddOpsEvent(_ context.Context, event OpsEvent) error {
+	if event.Kind == "backend_restarted" {
+		return nil
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	event.ID = int64(len(store.events) + 1)
+	store.events = append(store.events, event)
+	return nil
+}
+
+func (store *fakeOpsStore) LatestOpsEvents(_ context.Context, limit int) ([]OpsEvent, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	if limit <= 0 || limit > len(store.events) {
+		limit = len(store.events)
+	}
+
+	output := make([]OpsEvent, 0, limit)
+	for index := len(store.events) - 1; index >= 0 && len(output) < limit; index-- {
+		output = append(output, store.events[index])
+	}
+
+	return output, nil
+}
+
+func (store *fakeOpsStore) hasEventKind(kind string) bool {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	for _, event := range store.events {
+		if event.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
 
 func TestHandleIngestRejectsUnauthorized(t *testing.T) {
 	store := &fakeStore{}
@@ -412,4 +460,114 @@ func TestHandleInsightsNoRequestRateLimit(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, response.Code)
 	}
+}
+
+func TestHandleOpsEventsReturnsPersistedEvents(t *testing.T) {
+	store := &fakeOpsStore{
+		fakeStore: &fakeStore{},
+		events: []OpsEvent{
+			{
+				ID:        1,
+				Timestamp: 1738886400000,
+				Kind:      "device_connected",
+				Title:     "Device connected",
+				Detail:    "Telemetry ingest resumed.",
+			},
+			{
+				ID:        2,
+				Timestamp: 1738886460000,
+				Kind:      "device_disconnected",
+				Title:     "Device disconnected",
+				Detail:    "No telemetry received for 45s.",
+			},
+		},
+	}
+	api := NewAPI(store, "secret")
+	handler := api.Handler()
+
+	request := httptest.NewRequest(http.MethodGet, "/api/ops/events?limit=1", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, response.Code)
+	}
+
+	var payload struct {
+		Events []OpsEvent `json:"events"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+
+	if len(payload.Events) != 1 {
+		t.Fatalf("expected one event, got %d", len(payload.Events))
+	}
+	if payload.Events[0].Kind != "device_disconnected" {
+		t.Fatalf("expected most recent device_disconnected event, got %q", payload.Events[0].Kind)
+	}
+}
+
+func TestHandleOpsEventsRejectsInvalidLimit(t *testing.T) {
+	store := &fakeOpsStore{fakeStore: &fakeStore{}}
+	api := NewAPI(store, "secret")
+	handler := api.Handler()
+
+	request := httptest.NewRequest(http.MethodGet, "/api/ops/events?limit=999", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, response.Code)
+	}
+}
+
+func TestDeviceConnectivityEventsArePersisted(t *testing.T) {
+	store := &fakeOpsStore{fakeStore: &fakeStore{}}
+	api := NewAPI(
+		store,
+		"secret",
+		WithOpsConfig(OpsConfig{
+			DeviceOfflineTimeout: 20 * time.Millisecond,
+			MonitorInterval:      5 * time.Millisecond,
+		}),
+	)
+	handler := api.Handler()
+
+	request := httptest.NewRequest(http.MethodPost, "/api/ingest", bytes.NewBufferString(`{
+		"timestamp":"1738886400",
+		"temperature":"22.4",
+		"pressure":"101305",
+		"humidity":"40.1",
+		"oxidised":"1.2",
+		"reduced":"1.1",
+		"nh3":"0.7",
+		"pm1":"2",
+		"pm2":"3",
+		"pm10":"4"
+	}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-API-Key", "secret")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("expected status %d, got %d", http.StatusAccepted, response.Code)
+	}
+
+	waitForEvent := func(kind string) {
+		t.Helper()
+
+		deadline := time.Now().Add(400 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			if store.hasEventKind(kind) {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("expected event kind %q to be persisted", kind)
+	}
+
+	waitForEvent("device_connected")
+	waitForEvent("device_disconnected")
 }

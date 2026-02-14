@@ -44,10 +44,10 @@ func DefaultInsightsSchedulerConfig() InsightsSchedulerConfig {
 		AnalysisLimit:    900,
 		RefreshInterval:  time.Hour,
 		EventMinInterval: 10 * time.Minute,
-		PM2Threshold:     15.0,
-		PM10Threshold:    45.0,
-		PM2DeltaTrigger:  8.0,
-		PM10DeltaTrigger: 15.0,
+		PM2Threshold:     8.0,
+		PM10Threshold:    30.0,
+		PM2DeltaTrigger:  3.0,
+		PM10DeltaTrigger: 10.0,
 		AnalyzeTimeout:   15 * time.Second,
 	}
 }

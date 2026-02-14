@@ -102,7 +102,8 @@ func NewOpenAIAlertAnalyzer(apiKey string, model string, baseURL string, maxAler
 	}
 
 	return &openAIAlertAnalyzer{
-		httpClient: &http.Client{Timeout: 12 * time.Second},
+		// Request deadline is controlled by the caller context timeout.
+		httpClient: &http.Client{},
 		baseURL:    strings.TrimRight(trimmedBaseURL, "/"),
 		apiKey:     strings.TrimSpace(apiKey),
 		model:      trimmedModel,
@@ -240,14 +241,20 @@ func (analyzer *openAIAlertAnalyzer) Analyze(
 		}
 	}
 
-	return normalizeAlerts(envelope.Alerts, analyzer.maxAlerts), nil
+	alerts := normalizeAlerts(envelope.Alerts, analyzer.maxAlerts)
+	if len(alerts) == 0 {
+		return []Alert{fallbackStableAlert(readings)}, nil
+	}
+
+	return alerts, nil
 }
 
 func systemPrompt(maxAlerts int) string {
 	return fmt.Sprintf(
 		"You are an indoor air quality analyst. Return up to %d concise actionable insights "+
 			"for a home environment. Include a mix of alert, insight, and tip when useful. "+
-			"Use severities critical, warn, or info. Return zero items if conditions are stable. "+
+			"Use severities critical, warn, or info. Always return at least one insight. "+
+			"If conditions are stable, return one concise info insight describing stable conditions. "+
 			"Keep title under 60 characters and message under 180 characters.",
 		maxAlerts,
 	)
@@ -261,6 +268,7 @@ func alertSchema(maxAlerts int) map[string]any {
 		"properties": map[string]any{
 			"alerts": map[string]any{
 				"type":     "array",
+				"minItems": 1,
 				"maxItems": maxAlerts,
 				"items": map[string]any{
 					"type":                 "object",
@@ -352,6 +360,24 @@ func trimToLength(input string, maxLength int) string {
 		return input
 	}
 	return strings.TrimSpace(input[:maxLength])
+}
+
+func fallbackStableAlert(readings []SensorReading) Alert {
+	summary := buildAlertSummary(readings)
+	message := fmt.Sprintf(
+		"Air is stable. PM2.5 %.1f ug/m3, PM10 %.1f ug/m3, humidity %.0f%%, temperature %.1fC.",
+		summary.Latest.PM2,
+		summary.Latest.PM10,
+		summary.Latest.Humidity,
+		summary.Latest.Temperature,
+	)
+
+	return Alert{
+		Kind:     "insight",
+		Severity: "info",
+		Title:    "Air quality stable",
+		Message:  trimToLength(message, 180),
+	}
 }
 
 type alertSummary struct {
