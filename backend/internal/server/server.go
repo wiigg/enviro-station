@@ -20,6 +20,7 @@ const (
 	maxBatchSize       = 1000
 	maxReadingsLimit   = 100000
 	maxOpsEventsLimit  = 200
+	maxInsightsLimit   = 3
 )
 
 type API struct {
@@ -306,11 +307,15 @@ func (api *API) handleInsights(response http.ResponseWriter, request *http.Reque
 		return
 	}
 
-	alertLimit := 4
+	alertLimit := maxInsightsLimit
 	if rawLimit := request.URL.Query().Get("limit"); rawLimit != "" {
 		parsedLimit, err := strconv.Atoi(rawLimit)
-		if err != nil || parsedLimit < 1 || parsedLimit > 20 {
-			writeError(response, http.StatusBadRequest, "limit must be between 1 and 20")
+		if err != nil || parsedLimit < 1 || parsedLimit > maxInsightsLimit {
+			writeError(
+				response,
+				http.StatusBadRequest,
+				fmt.Sprintf("limit must be between 1 and %d", maxInsightsLimit),
+			)
 			return
 		}
 		alertLimit = parsedLimit
