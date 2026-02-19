@@ -240,6 +240,92 @@ LIMIT $1
 	return readings, nil
 }
 
+func (store *PostgresStore) Range(
+	ctx context.Context,
+	fromTimestamp int64,
+	toTimestamp int64,
+	maxPoints int,
+) ([]SensorReading, error) {
+	if maxPoints <= 0 {
+		maxPoints = 1000
+	}
+
+	const countQuery = `
+SELECT COUNT(*)
+FROM sensor_readings
+WHERE timestamp >= $1 AND timestamp <= $2
+`
+
+	var totalRows int64
+	if err := store.pool.QueryRow(ctx, countQuery, fromTimestamp, toTimestamp).Scan(&totalRows); err != nil {
+		return nil, err
+	}
+	if totalRows == 0 {
+		return []SensorReading{}, nil
+	}
+
+	stride := int64(1)
+	if totalRows > int64(maxPoints) {
+		stride = (totalRows + int64(maxPoints) - 1) / int64(maxPoints)
+	}
+
+	const rangeQuery = `
+WITH ranked AS (
+  SELECT
+    timestamp,
+    temperature,
+    pressure,
+    humidity,
+    oxidised,
+    reduced,
+    nh3,
+    pm1,
+    pm2,
+    pm10,
+    ROW_NUMBER() OVER (ORDER BY id ASC) AS row_num
+  FROM sensor_readings
+  WHERE timestamp >= $1 AND timestamp <= $2
+)
+SELECT timestamp, temperature, pressure, humidity, oxidised, reduced, nh3, pm1, pm2, pm10
+FROM ranked
+WHERE ((row_num - 1) % $3) = 0
+ORDER BY row_num ASC
+LIMIT $4
+`
+
+	rows, err := store.pool.Query(ctx, rangeQuery, fromTimestamp, toTimestamp, stride, maxPoints)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	readings := make([]SensorReading, 0, maxPoints)
+	for rows.Next() {
+		var reading SensorReading
+		if err = rows.Scan(
+			&reading.Timestamp,
+			&reading.Temperature,
+			&reading.Pressure,
+			&reading.Humidity,
+			&reading.Oxidised,
+			&reading.Reduced,
+			&reading.Nh3,
+			&reading.PM1,
+			&reading.PM2,
+			&reading.PM10,
+		); err != nil {
+			return nil, err
+		}
+		readings = append(readings, reading)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return readings, nil
+}
+
 func (store *PostgresStore) DeleteOlderThan(ctx context.Context, cutoffTimestamp int64, limit int) (int64, error) {
 	if limit <= 0 {
 		limit = 1000

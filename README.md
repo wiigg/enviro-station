@@ -59,6 +59,7 @@ uv run python main.py
 - `POST /api/ingest/batch` (requires `X-API-Key`)
 - `GET /api/stream` (SSE)
 - `GET /api/readings?limit=...`
+- `GET /api/readings?from=...&to=...&max_points=...`
 - `GET /api/insights?limit=...`
 - `GET /api/ops/events?limit=...`
 - `GET /health`

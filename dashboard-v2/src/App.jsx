@@ -9,20 +9,55 @@ import {
   YAxis
 } from "recharts";
 import {
-  appendReading,
   buildKpis,
   normalizeReading,
   normalizeReadings
 } from "./lib/readings";
 
-const MAX_STREAM_POINTS = 100000;
+const MINUTE_MS = 60 * 1000;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
+const WEEK_MS = 7 * DAY_MS;
 
 const WINDOW_OPTIONS = [
-  { id: "live", label: "Live", historyLimit: 900, chartPoints: 900 },
-  { id: "1h", label: "1h", historyLimit: 3600, chartPoints: 1800 },
-  { id: "24h", label: "24h", historyLimit: 86400, chartPoints: 7200 },
-  { id: "7d", label: "7d", historyLimit: 100000, chartPoints: 7000 }
+  {
+    id: "live",
+    label: "Live",
+    rangeMs: 15 * MINUTE_MS,
+    queryMaxPoints: 900,
+    chartPoints: 900,
+    cacheTtlMs: 15000
+  },
+  {
+    id: "1h",
+    label: "1h",
+    rangeMs: HOUR_MS,
+    queryMaxPoints: 1800,
+    chartPoints: 1800,
+    cacheTtlMs: 30000
+  },
+  {
+    id: "24h",
+    label: "24h",
+    rangeMs: DAY_MS,
+    queryMaxPoints: 7200,
+    chartPoints: 7200,
+    cacheTtlMs: 120000
+  },
+  {
+    id: "7d",
+    label: "7d",
+    rangeMs: WEEK_MS,
+    queryMaxPoints: 7000,
+    chartPoints: 7000,
+    cacheTtlMs: 300000
+  }
 ];
+const WINDOW_OPTIONS_BY_ID = Object.fromEntries(
+  WINDOW_OPTIONS.map((windowOption) => [windowOption.id, windowOption])
+);
+const PREFETCH_WINDOW_IDS = ["1h", "24h"];
+const STREAM_WINDOW_IDS = ["live", "1h", "24h"];
 
 const INSIGHT_POLL_INTERVAL_MS = 30000;
 const INSIGHT_MAX_ITEMS = 3;
@@ -199,6 +234,19 @@ function downsampleReadings(readings, maxPoints) {
   return readings.filter((_, index) => index % stride === 0);
 }
 
+function buildHistoryUrl(backendBaseUrl, windowOption, nowMs = Date.now()) {
+  const fromTimestamp = nowMs - windowOption.rangeMs;
+  return `${backendBaseUrl}/api/readings?from=${fromTimestamp}&to=${nowMs}&max_points=${windowOption.queryMaxPoints}`;
+}
+
+function appendReadingForWindow(readings, reading, windowOption) {
+  const cutoffTimestamp = reading.timestamp - windowOption.rangeMs;
+  const nextReadings = [...readings, reading].filter(
+    (existingReading) => existingReading.timestamp >= cutoffTimestamp
+  );
+  return downsampleReadings(nextReadings, windowOption.queryMaxPoints);
+}
+
 function normalizeInsight(rawInsight) {
   if (!rawInsight || typeof rawInsight !== "object") {
     return null;
@@ -325,7 +373,6 @@ export default function App() {
   const [windowId, setWindowId] = useState("live");
   const [readings, setReadings] = useState([]);
   const [connectionStatus, setConnectionStatus] = useState("connecting");
-  const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [lastError, setLastError] = useState("");
   const [insights, setInsights] = useState(initialInsightsCache?.insights ?? []);
   const [insightsError, setInsightsError] = useState("");
@@ -338,64 +385,132 @@ export default function App() {
   const [isLoadingFeed, setIsLoadingFeed] = useState(true);
 
   const lastStreamEventAtRef = useRef(0);
+  const historyCacheRef = useRef({});
+  const selectedWindowIdRef = useRef(windowId);
 
   const selectedWindow = useMemo(
-    () => WINDOW_OPTIONS.find((windowOption) => windowOption.id === windowId) ?? WINDOW_OPTIONS[0],
+    () => WINDOW_OPTIONS_BY_ID[windowId] ?? WINDOW_OPTIONS[0],
     [windowId]
   );
 
   useEffect(() => {
+    selectedWindowIdRef.current = windowId;
+  }, [windowId]);
+
+  const loadReadingsWindow = useCallback(
+    async (targetWindowId, signal) => {
+      const targetWindow = WINDOW_OPTIONS_BY_ID[targetWindowId];
+      const historyUrl = buildHistoryUrl(backendBaseUrl, targetWindow);
+      const response = await fetch(historyUrl, { signal });
+      const payload = await parseJSONResponse(
+        response,
+        `${targetWindow.label} history endpoint`,
+        historyUrl,
+        backendBaseUrl
+      );
+
+      if (!response.ok) {
+        const errorMessage =
+          typeof payload.error === "string"
+            ? payload.error
+            : `History request failed with status ${response.status}`;
+        throw new Error(errorMessage);
+      }
+
+      const normalized = normalizeReadings(payload.readings);
+      historyCacheRef.current[targetWindowId] = {
+        readings: normalized,
+        fetchedAt: Date.now()
+      };
+      return normalized;
+    },
+    [backendBaseUrl]
+  );
+
+  useEffect(() => {
+    let closed = false;
     const abortController = new AbortController();
+    const cacheEntry = historyCacheRef.current[selectedWindow.id];
 
-    async function loadHistory() {
-      setIsLoadingHistory(true);
+    if (cacheEntry) {
+      setReadings(cacheEntry.readings);
+      setLastError("");
+    } else {
+      setReadings([]);
+    }
 
+    const shouldRevalidate =
+      !cacheEntry || Date.now() - cacheEntry.fetchedAt > selectedWindow.cacheTtlMs;
+    if (!shouldRevalidate) {
+      return () => {
+        abortController.abort();
+      };
+    }
+
+    async function revalidateSelectedWindow() {
       try {
-        const historyUrl = `${backendBaseUrl}/api/readings?limit=${selectedWindow.historyLimit}`;
-        const response = await fetch(historyUrl, { signal: abortController.signal });
-        const payload = await parseJSONResponse(
-          response,
-          "History endpoint",
-          historyUrl,
-          backendBaseUrl
-        );
-
-        if (!response.ok) {
-          const errorMessage =
-            typeof payload.error === "string"
-              ? payload.error
-              : `History request failed with status ${response.status}`;
-          throw new Error(errorMessage);
-        }
-
-        const normalized = normalizeReadings(payload.readings);
-        setReadings(normalized);
-        setLastError("");
-      } catch (error) {
-        if (abortController.signal.aborted) {
+        const normalized = await loadReadingsWindow(selectedWindow.id, abortController.signal);
+        if (closed || abortController.signal.aborted) {
           return;
         }
-
+        if (selectedWindowIdRef.current === selectedWindow.id) {
+          setReadings(normalized);
+        }
+        setLastError("");
+      } catch (error) {
+        if (closed || abortController.signal.aborted) {
+          return;
+        }
         const message = error instanceof Error ? error.message : "History request failed";
         setLastError(message);
-      } finally {
-        if (!abortController.signal.aborted) {
-          setIsLoadingHistory(false);
+      }
+    }
+
+    revalidateSelectedWindow();
+
+    return () => {
+      closed = true;
+      abortController.abort();
+    };
+  }, [loadReadingsWindow, selectedWindow.cacheTtlMs, selectedWindow.id]);
+
+  useEffect(() => {
+    let closed = false;
+    const abortControllers = [];
+
+    async function prefetchPrimaryWindows() {
+      for (const targetWindowId of PREFETCH_WINDOW_IDS) {
+        if (closed || targetWindowId === selectedWindow.id) {
+          continue;
+        }
+
+        const targetWindow = WINDOW_OPTIONS_BY_ID[targetWindowId];
+        const cacheEntry = historyCacheRef.current[targetWindowId];
+        if (cacheEntry && Date.now() - cacheEntry.fetchedAt <= targetWindow.cacheTtlMs) {
+          continue;
+        }
+
+        const abortController = new AbortController();
+        abortControllers.push(abortController);
+        try {
+          await loadReadingsWindow(targetWindowId, abortController.signal);
+        } catch (_error) {
+          if (closed || abortController.signal.aborted) {
+            return;
+          }
         }
       }
     }
 
-    loadHistory();
+    prefetchPrimaryWindows();
 
     return () => {
-      abortController.abort();
+      closed = true;
+      for (const abortController of abortControllers) {
+        abortController.abort();
+      }
     };
-  }, [
-    backendBaseUrl,
-    selectedWindow.id,
-    selectedWindow.historyLimit,
-    selectedWindow.label,
-  ]);
+  }, [loadReadingsWindow, selectedWindow.id]);
 
   useEffect(() => {
     let closed = false;
@@ -421,9 +536,43 @@ export default function App() {
           }
 
           lastStreamEventAtRef.current = Date.now();
-          setReadings((previousReadings) =>
-            appendReading(previousReadings, reading, MAX_STREAM_POINTS)
-          );
+          const streamUpdatedAt = Date.now();
+
+          for (const targetWindowId of STREAM_WINDOW_IDS) {
+            const targetWindow = WINDOW_OPTIONS_BY_ID[targetWindowId];
+            const cacheEntry = historyCacheRef.current[targetWindowId];
+            const nextReadings = appendReadingForWindow(
+              cacheEntry?.readings ?? [],
+              reading,
+              targetWindow
+            );
+
+            historyCacheRef.current[targetWindowId] = {
+              readings: nextReadings,
+              fetchedAt: streamUpdatedAt
+            };
+
+            if (selectedWindowIdRef.current === targetWindowId) {
+              setReadings(nextReadings);
+            }
+          }
+
+          if (selectedWindowIdRef.current === "7d") {
+            const cacheEntry = historyCacheRef.current["7d"];
+            if (cacheEntry?.readings?.length) {
+              const nextReadings = appendReadingForWindow(
+                cacheEntry.readings,
+                reading,
+                WINDOW_OPTIONS_BY_ID["7d"]
+              );
+              historyCacheRef.current["7d"] = {
+                readings: nextReadings,
+                fetchedAt: streamUpdatedAt
+              };
+              setReadings(nextReadings);
+            }
+          }
+
           setConnectionStatus("live");
           setLastError("");
         } catch (_error) {
@@ -622,12 +771,7 @@ export default function App() {
     };
   }, [backendBaseUrl]);
 
-  const visibleReadings = useMemo(() => {
-    if (readings.length <= selectedWindow.historyLimit) {
-      return readings;
-    }
-    return readings.slice(readings.length - selectedWindow.historyLimit);
-  }, [readings, selectedWindow.historyLimit]);
+  const visibleReadings = readings;
 
   const chartReadings = useMemo(
     () => downsampleReadings(visibleReadings, selectedWindow.chartPoints),

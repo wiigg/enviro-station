@@ -23,6 +23,10 @@ const (
 	maxInsightsLimit   = 3
 )
 
+type readingsRangeStore interface {
+	Range(ctx context.Context, fromTimestamp int64, toTimestamp int64, maxPoints int) ([]SensorReading, error)
+}
+
 type API struct {
 	store                   Store
 	ingestAPIKey            string
@@ -228,6 +232,64 @@ func (api *API) handleReadings(response http.ResponseWriter, request *http.Reque
 		return
 	}
 
+	rawFrom := request.URL.Query().Get("from")
+	rawTo := request.URL.Query().Get("to")
+	if rawFrom != "" || rawTo != "" {
+		if rawFrom == "" || rawTo == "" {
+			writeError(response, http.StatusBadRequest, "from and to must be provided together")
+			return
+		}
+
+		rangeStore, ok := api.store.(readingsRangeStore)
+		if !ok {
+			writeError(response, http.StatusNotImplemented, "readings range query is not supported")
+			return
+		}
+
+		fromTimestamp, err := parseReadingsTimestamp(rawFrom)
+		if err != nil {
+			writeError(response, http.StatusBadRequest, "from must be a valid unix timestamp")
+			return
+		}
+		toTimestamp, err := parseReadingsTimestamp(rawTo)
+		if err != nil {
+			writeError(response, http.StatusBadRequest, "to must be a valid unix timestamp")
+			return
+		}
+		if fromTimestamp >= toTimestamp {
+			writeError(response, http.StatusBadRequest, "from must be less than to")
+			return
+		}
+
+		maxPoints := 1000
+		if rawMaxPoints := request.URL.Query().Get("max_points"); rawMaxPoints != "" {
+			parsedMaxPoints, maxPointsErr := strconv.Atoi(rawMaxPoints)
+			if maxPointsErr != nil || parsedMaxPoints < 1 || parsedMaxPoints > maxReadingsLimit {
+				writeError(
+					response,
+					http.StatusBadRequest,
+					fmt.Sprintf("max_points must be between 1 and %d", maxReadingsLimit),
+				)
+				return
+			}
+			maxPoints = parsedMaxPoints
+		}
+
+		readings, readingsErr := rangeStore.Range(
+			request.Context(),
+			fromTimestamp,
+			toTimestamp,
+			maxPoints,
+		)
+		if readingsErr != nil {
+			writeError(response, http.StatusInternalServerError, "failed to read data")
+			return
+		}
+
+		writeJSON(response, http.StatusOK, map[string]any{"readings": readings})
+		return
+	}
+
 	limit := 100
 	if rawLimit := request.URL.Query().Get("limit"); rawLimit != "" {
 		parsedLimit, err := strconv.Atoi(rawLimit)
@@ -249,6 +311,18 @@ func (api *API) handleReadings(response http.ResponseWriter, request *http.Reque
 	}
 
 	writeJSON(response, http.StatusOK, map[string]any{"readings": readings})
+}
+
+func parseReadingsTimestamp(rawValue string) (int64, error) {
+	parsedValue, err := strconv.ParseInt(rawValue, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	// Frontend sends milliseconds. Stored readings are unix seconds.
+	if parsedValue >= 1_000_000_000_000 {
+		return parsedValue / 1000, nil
+	}
+	return parsedValue, nil
 }
 
 func (api *API) handleStream(response http.ResponseWriter, request *http.Request) {

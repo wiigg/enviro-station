@@ -9,10 +9,24 @@ Ingest endpoints require `INGEST_API_KEY`; read endpoints are public in this ver
 - `POST /api/ingest/batch` (requires `X-API-Key`)
 - `GET /api/stream` (SSE)
 - `GET /api/readings?limit=100`
+- `GET /api/readings?from=...&to=...&max_points=...`
 - `GET /api/insights?limit=3`
 - `GET /api/ops/events?limit=30`
 - `GET /health`
 - `GET /ready`
+
+### Readings query modes
+
+`GET /api/readings` supports two query modes:
+- `limit` mode: latest N rows, e.g. `?limit=100`
+- `range` mode: explicit time window with bounded payload, e.g.
+  `?from=1738886400000&to=1738972800000&max_points=7000`
+
+Range mode notes:
+- `from` and `to` must be provided together
+- timestamps may be unix seconds or milliseconds
+- `from` must be less than `to`
+- `max_points` must be between `1` and `100000` (default `1000`)
 
 ## Environment
 

@@ -16,10 +16,15 @@ import (
 type fakeStore struct {
 	added       []SensorReading
 	latest      []SensorReading
+	ranged      []SensorReading
 	latestErr   error
+	rangeErr    error
 	pingErr     error
 	addErr      error
 	addBatchErr error
+	rangeFrom   int64
+	rangeTo     int64
+	rangePoints int
 }
 
 func (store *fakeStore) Add(_ context.Context, reading SensorReading) error {
@@ -49,6 +54,27 @@ func (store *fakeStore) Latest(_ context.Context, limit int) ([]SensorReading, e
 	start := len(store.latest) - limit
 	output := make([]SensorReading, limit)
 	copy(output, store.latest[start:])
+	return output, nil
+}
+
+func (store *fakeStore) Range(_ context.Context, fromTimestamp int64, toTimestamp int64, maxPoints int) ([]SensorReading, error) {
+	if store.rangeErr != nil {
+		return nil, store.rangeErr
+	}
+
+	store.rangeFrom = fromTimestamp
+	store.rangeTo = toTimestamp
+	store.rangePoints = maxPoints
+
+	if len(store.ranged) == 0 {
+		return []SensorReading{}, nil
+	}
+
+	output := make([]SensorReading, len(store.ranged))
+	copy(output, store.ranged)
+	if maxPoints > 0 && len(output) > maxPoints {
+		output = output[:maxPoints]
+	}
 	return output, nil
 }
 
@@ -335,6 +361,53 @@ func TestHandleReadingsReturnsOKWithoutReadKey(t *testing.T) {
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, response.Code)
+	}
+}
+
+func TestHandleReadingsRangeQuery(t *testing.T) {
+	store := &fakeStore{
+		ranged: []SensorReading{
+			{Timestamp: 1738886400, PM2: 3.2, PM10: 6.4},
+			{Timestamp: 1738888200, PM2: 4.1, PM10: 7.2},
+		},
+	}
+	api := NewAPI(store, "secret")
+	handler := api.Handler()
+
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/api/readings?from=1738886400000&to=1738889999000&max_points=2",
+		nil,
+	)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, response.Code)
+	}
+	if store.rangeFrom != 1738886400 {
+		t.Fatalf("expected range from in seconds, got %d", store.rangeFrom)
+	}
+	if store.rangeTo != 1738889999 {
+		t.Fatalf("expected range to in seconds, got %d", store.rangeTo)
+	}
+	if store.rangePoints != 2 {
+		t.Fatalf("expected max_points=2, got %d", store.rangePoints)
+	}
+}
+
+func TestHandleReadingsRangeRequiresBothBounds(t *testing.T) {
+	store := &fakeStore{}
+	api := NewAPI(store, "secret")
+	handler := api.Handler()
+
+	request := httptest.NewRequest(http.MethodGet, "/api/readings?from=1738886400", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, response.Code)
 	}
 }
 

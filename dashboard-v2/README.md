@@ -14,7 +14,14 @@ VITE_BACKEND_URL=http://localhost:8080
 
 If `VITE_BACKEND_URL` is unset:
 - local Vite dev uses `http://localhost:8080`
-- hosted builds use same-origin
+- hosted builds default to same-origin (unless a hostname-specific fallback is defined in app code)
+
+## Data loading behaviour
+
+- History charts use time-range API queries (`from`/`to`/`max_points`) instead of large count-based fetches.
+- `Live`, `1h`, and `24h` windows are prefetched and refreshed incrementally from SSE for fast switching.
+- `7d` is loaded on demand when selected and refreshed on a longer cache TTL.
+- Insights are cached in `sessionStorage` and revalidated in the background.
 
 ## Run
 
