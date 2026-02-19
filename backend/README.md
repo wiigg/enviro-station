@@ -35,7 +35,6 @@ Range mode notes:
 - `INGEST_API_KEY` (required)
 - `DATABASE_URL` (required)
 - `PG_MAX_CONNS` (default: `10`)
-- `TRUST_PROXY_HEADERS` (default: `false`)
 - `OPS_DEVICE_OFFLINE_TIMEOUT` (default: `45s`)
 - `OPS_MONITOR_INTERVAL` (default: `5s`)
 - `OPENAI_API_KEY` (optional; enables `/api/insights`)

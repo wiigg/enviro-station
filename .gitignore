@@ -9,5 +9,6 @@
 **/node_modules/
 **/dist/
 **/.vite/
+**/fly.toml
 .DS_Store
 venv

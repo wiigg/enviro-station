@@ -30,7 +30,6 @@ type readingsRangeStore interface {
 type API struct {
 	store                   Store
 	ingestAPIKey            string
-	trustProxyIP            bool
 	stream                  *streamHub
 	alertAnalyzer           AlertAnalyzer
 	insightsEngine          InsightsEngine
@@ -61,12 +60,6 @@ func WithInsightsEngine(engine InsightsEngine) APIOption {
 func WithInsightsSchedulerConfig(config InsightsSchedulerConfig) APIOption {
 	return func(api *API) {
 		api.insightsSchedulerConfig = config
-	}
-}
-
-func WithTrustProxyIP(enabled bool) APIOption {
-	return func(api *API) {
-		api.trustProxyIP = enabled
 	}
 }
 

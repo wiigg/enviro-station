@@ -44,7 +44,6 @@ func main() {
 	startRetentionWorker(store)
 
 	options := make([]server.APIOption, 0, 1)
-	options = append(options, server.WithTrustProxyIP(boolOrDefault("TRUST_PROXY_HEADERS", false)))
 	options = append(options, server.WithOpsConfig(server.OpsConfig{
 		DeviceOfflineTimeout: durationOrDefault("OPS_DEVICE_OFFLINE_TIMEOUT", 45*time.Second),
 		MonitorInterval:      durationOrDefault("OPS_MONITOR_INTERVAL", 5*time.Second),

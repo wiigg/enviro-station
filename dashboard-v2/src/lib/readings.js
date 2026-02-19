@@ -46,14 +46,6 @@ export function normalizeReadings(rawReadings) {
     .sort((a, b) => a.timestamp - b.timestamp);
 }
 
-export function appendReading(readings, reading, maxPoints) {
-  const next = [...readings, reading];
-  if (next.length <= maxPoints) {
-    return next;
-  }
-  return next.slice(next.length - maxPoints);
-}
-
 export function buildKpis(readings, windowId = "live") {
   const latest = readings[readings.length - 1];
 
@@ -98,13 +90,6 @@ export function buildKpis(readings, windowId = "live") {
       state: "ok"
     }
   ];
-}
-
-export function getSeries(readings) {
-  return {
-    particulate: readings.map((item) => item.pm2),
-    comfort: readings.map((item) => item.temperature)
-  };
 }
 
 function average(values) {
