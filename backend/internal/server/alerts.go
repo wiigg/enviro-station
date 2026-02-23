@@ -9,8 +9,6 @@ import (
 	"math"
 	"net/http"
 	"strings"
-	"sync"
-	"time"
 )
 
 type Alert struct {
@@ -23,50 +21,6 @@ type Alert struct {
 type AlertAnalyzer interface {
 	Analyze(ctx context.Context, readings []SensorReading) ([]Alert, error)
 	Source() string
-}
-
-type cachedAlertAnalyzer struct {
-	next      AlertAnalyzer
-	ttl       time.Duration
-	lastAt    time.Time
-	lastValue []Alert
-	mu        sync.Mutex
-}
-
-func NewCachedAlertAnalyzer(next AlertAnalyzer, ttl time.Duration) AlertAnalyzer {
-	return &cachedAlertAnalyzer{next: next, ttl: ttl}
-}
-
-func (analyzer *cachedAlertAnalyzer) Source() string {
-	return analyzer.next.Source()
-}
-
-func (analyzer *cachedAlertAnalyzer) Analyze(
-	ctx context.Context,
-	readings []SensorReading,
-) ([]Alert, error) {
-	if analyzer.ttl <= 0 {
-		return analyzer.next.Analyze(ctx, readings)
-	}
-
-	now := time.Now()
-
-	analyzer.mu.Lock()
-	defer analyzer.mu.Unlock()
-
-	if now.Sub(analyzer.lastAt) < analyzer.ttl {
-		cached := cloneAlerts(analyzer.lastValue)
-		return cached, nil
-	}
-
-	alerts, err := analyzer.next.Analyze(ctx, readings)
-	if err != nil {
-		return nil, err
-	}
-
-	analyzer.lastAt = now
-	analyzer.lastValue = cloneAlerts(alerts)
-	return alerts, nil
 }
 
 func cloneAlerts(alerts []Alert) []Alert {

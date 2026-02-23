@@ -313,7 +313,7 @@ function readInsightsCache(backendBaseUrl) {
   }
 }
 
-function writeInsightsCache(backendBaseUrl, source, generatedAt, insights) {
+function writeInsightsCache(backendBaseUrl, source, insights) {
   if (typeof window === "undefined") {
     return;
   }
@@ -324,7 +324,6 @@ function writeInsightsCache(backendBaseUrl, source, generatedAt, insights) {
       JSON.stringify({
         backend_base_url: backendBaseUrl,
         source,
-        generated_at: generatedAt,
         insights
       })
     );
@@ -671,18 +670,11 @@ export default function App() {
           .filter(Boolean)
           .slice(0, INSIGHT_MAX_ITEMS);
         const nextSource = typeof payload.source === "string" ? payload.source : "openai";
-        const generatedAtRaw = Number(payload.generated_at);
-        const generatedAt = Number.isFinite(generatedAtRaw) ? generatedAtRaw : 0;
 
         setInsights(nextInsights);
         setInsightSource(nextSource);
         setInsightsError("");
-        writeInsightsCache(
-          backendBaseUrl,
-          nextSource,
-          generatedAt,
-          nextInsights
-        );
+        writeInsightsCache(backendBaseUrl, nextSource, nextInsights);
       } catch (error) {
         if (closed || abortController.signal.aborted) {
           return;
@@ -771,14 +763,12 @@ export default function App() {
     };
   }, [backendBaseUrl]);
 
-  const visibleReadings = readings;
-
   const chartReadings = useMemo(
-    () => downsampleReadings(visibleReadings, selectedWindow.chartPoints),
-    [visibleReadings, selectedWindow.chartPoints]
+    () => downsampleReadings(readings, selectedWindow.chartPoints),
+    [readings, selectedWindow.chartPoints]
   );
 
-  const kpis = useMemo(() => buildKpis(visibleReadings, windowId), [visibleReadings, windowId]);
+  const kpis = useMemo(() => buildKpis(readings, windowId), [readings, windowId]);
 
   const chartData = useMemo(
     () =>
@@ -790,8 +780,8 @@ export default function App() {
     [chartReadings]
   );
   const temperatureDomain = useMemo(
-    () => computeTemperatureDomain(visibleReadings),
-    [visibleReadings]
+    () => computeTemperatureDomain(readings),
+    [readings]
   );
   const axisTickFormatter = useCallback(
     (timestamp) => {

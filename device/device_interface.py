@@ -105,11 +105,12 @@ class DeviceInterface:
 
     def display_status(self):
         """Display Raspberry Pi serial and Wi-Fi status"""
-        wifi_status = "connected" if check_wifi() else "disconnected"
+        wifi_connected = check_wifi()
+        wifi_status = "connected" if wifi_connected else "disconnected"
         text_colour = (255, 255, 255)
-        back_colour = (0, 170, 170) if check_wifi() else (85, 15, 15)
-        id = get_serial_number()
-        message = "{}\nWi-Fi: {}".format(id, wifi_status)
+        back_colour = (0, 170, 170) if wifi_connected else (85, 15, 15)
+        serial_number = get_serial_number()
+        message = "{}\nWi-Fi: {}".format(serial_number, wifi_status)
         img = Image.new("RGB", (self.WIDTH, self.HEIGHT), color=(0, 0, 0))
         draw = ImageDraw.Draw(img)
         left, top, right, bottom = draw.multiline_textbbox((0, 0), message, font=self.font)
