@@ -12,6 +12,7 @@ import (
 )
 
 type Alert struct {
+	Topic    string `json:"topic,omitempty"`
 	Kind     string `json:"kind"`
 	Severity string `json:"severity"`
 	Title    string `json:"title"`
@@ -21,6 +22,34 @@ type Alert struct {
 type AlertAnalyzer interface {
 	Analyze(ctx context.Context, readings []SensorReading) ([]Alert, error)
 	Source() string
+}
+
+type AlertThresholds struct {
+	PM2Threshold             float64
+	PM10Threshold            float64
+	PM2DeltaTrigger          float64
+	PM10DeltaTrigger         float64
+	HumidityLowThreshold     float64
+	HumidityHighThreshold    float64
+	HumidityDeltaTrigger     float64
+	TemperatureLowThreshold  float64
+	TemperatureHighThreshold float64
+	TemperatureDeltaTrigger  float64
+}
+
+func defaultAlertThresholds() AlertThresholds {
+	return AlertThresholds{
+		PM2Threshold:             8.0,
+		PM10Threshold:            30.0,
+		PM2DeltaTrigger:          5.0,
+		PM10DeltaTrigger:         15.0,
+		HumidityLowThreshold:     40.0,
+		HumidityHighThreshold:    60.0,
+		HumidityDeltaTrigger:     8.0,
+		TemperatureLowThreshold:  18.0,
+		TemperatureHighThreshold: 26.0,
+		TemperatureDeltaTrigger:  1.5,
+	}
 }
 
 func cloneAlerts(alerts []Alert) []Alert {
@@ -35,9 +64,16 @@ type openAIAlertAnalyzer struct {
 	apiKey     string
 	model      string
 	maxAlerts  int
+	thresholds AlertThresholds
 }
 
-func NewOpenAIAlertAnalyzer(apiKey string, model string, baseURL string, maxAlerts int) AlertAnalyzer {
+func NewOpenAIAlertAnalyzer(
+	apiKey string,
+	model string,
+	baseURL string,
+	maxAlerts int,
+	thresholds AlertThresholds,
+) AlertAnalyzer {
 	trimmedModel := strings.TrimSpace(model)
 	if trimmedModel == "" {
 		trimmedModel = "gpt-5-mini"
@@ -55,6 +91,39 @@ func NewOpenAIAlertAnalyzer(apiKey string, model string, baseURL string, maxAler
 		maxAlerts = maxInsightsLimit
 	}
 
+	normalizedThresholds := thresholds
+	defaults := defaultAlertThresholds()
+	if normalizedThresholds.PM2Threshold <= 0 {
+		normalizedThresholds.PM2Threshold = defaults.PM2Threshold
+	}
+	if normalizedThresholds.PM10Threshold <= 0 {
+		normalizedThresholds.PM10Threshold = defaults.PM10Threshold
+	}
+	if normalizedThresholds.PM2DeltaTrigger <= 0 {
+		normalizedThresholds.PM2DeltaTrigger = defaults.PM2DeltaTrigger
+	}
+	if normalizedThresholds.PM10DeltaTrigger <= 0 {
+		normalizedThresholds.PM10DeltaTrigger = defaults.PM10DeltaTrigger
+	}
+	if normalizedThresholds.HumidityLowThreshold <= 0 {
+		normalizedThresholds.HumidityLowThreshold = defaults.HumidityLowThreshold
+	}
+	if normalizedThresholds.HumidityHighThreshold <= normalizedThresholds.HumidityLowThreshold {
+		normalizedThresholds.HumidityHighThreshold = defaults.HumidityHighThreshold
+	}
+	if normalizedThresholds.HumidityDeltaTrigger <= 0 {
+		normalizedThresholds.HumidityDeltaTrigger = defaults.HumidityDeltaTrigger
+	}
+	if normalizedThresholds.TemperatureLowThreshold <= 0 {
+		normalizedThresholds.TemperatureLowThreshold = defaults.TemperatureLowThreshold
+	}
+	if normalizedThresholds.TemperatureHighThreshold <= normalizedThresholds.TemperatureLowThreshold {
+		normalizedThresholds.TemperatureHighThreshold = defaults.TemperatureHighThreshold
+	}
+	if normalizedThresholds.TemperatureDeltaTrigger <= 0 {
+		normalizedThresholds.TemperatureDeltaTrigger = defaults.TemperatureDeltaTrigger
+	}
+
 	return &openAIAlertAnalyzer{
 		// Request deadline is controlled by the caller context timeout.
 		httpClient: &http.Client{},
@@ -62,6 +131,7 @@ func NewOpenAIAlertAnalyzer(apiKey string, model string, baseURL string, maxAler
 		apiKey:     strings.TrimSpace(apiKey),
 		model:      trimmedModel,
 		maxAlerts:  maxAlerts,
+		thresholds: normalizedThresholds,
 	}
 }
 
@@ -77,7 +147,9 @@ func (analyzer *openAIAlertAnalyzer) Analyze(
 		return []Alert{}, nil
 	}
 
-	payload, err := json.Marshal(buildAlertSummary(readings))
+	summary := buildAlertSummary(readings)
+
+	payload, err := json.Marshal(summary)
 	if err != nil {
 		return nil, fmt.Errorf("marshal summary: %w", err)
 	}
@@ -90,7 +162,7 @@ func (analyzer *openAIAlertAnalyzer) Analyze(
 				"content": []map[string]any{
 					{
 						"type": "input_text",
-						"text": systemPrompt(analyzer.maxAlerts),
+						"text": systemPrompt(analyzer.maxAlerts, analyzer.thresholds),
 					},
 				},
 			},
@@ -195,26 +267,50 @@ func (analyzer *openAIAlertAnalyzer) Analyze(
 		}
 	}
 
-	alerts := normalizeAlerts(envelope.Alerts, analyzer.maxAlerts)
+	alerts := normalizeAlerts(envelope.Alerts, analyzer.maxAlerts, summary, analyzer.thresholds)
 	if len(alerts) == 0 {
+		fallback := fallbackAlerts(summary, analyzer.maxAlerts, analyzer.thresholds)
+		if len(fallback) > 0 {
+			return fallback, nil
+		}
 		return []Alert{fallbackStableAlert(readings)}, nil
 	}
 
 	return alerts, nil
 }
 
-func systemPrompt(maxAlerts int) string {
+func systemPrompt(maxAlerts int, thresholds AlertThresholds) string {
+	topics := focusedAlertTopics()
 	return fmt.Sprintf(
-		"You are an indoor air quality analyst. Return up to %d concise actionable insights "+
-			"for a home environment. Include a mix of alert, insight, and tip when useful. "+
-			"Use severities critical, warn, or info. Always return at least one insight. "+
-			"If conditions are stable, return one concise info insight describing stable conditions. "+
+		"You are an indoor air quality analyst. Return between 1 and %d concise actionable insights "+
+			"for a home environment. Use focused topics at most once each and prefer this order: %s. "+
+			"If all monitored conditions are stable, return exactly one info insight with topic general. "+
+			"Otherwise return only the noteworthy topics and omit stable ones. "+
+			"Each non-general alert must focus on one topic only and must not bundle unrelated metrics. "+
+			"For air_quality discuss PM2.5 and PM10 only, treating PM2.5 at or above %.1f ug/m3, PM10 at or above %.1f ug/m3, or 10 minute moves of %.1f/%.1f ug/m3 as noteworthy. "+
+			"For humidity discuss humidity only, treating values below %.0f%% or above %.0f%% and 10 minute moves of %.1f points as noteworthy. "+
+			"For temperature discuss temperature only, treating values below %.1fC or above %.1fC and 10 minute moves of %.1fC as noteworthy. "+
+			"Treat both worsening and improvement as noteworthy when the change is material. "+
+			"Use severities critical, warn, or info. "+
 			"Keep title under 60 characters and message under 180 characters.",
 		maxAlerts,
+		strings.Join(topics, ", "),
+		thresholds.PM2Threshold,
+		thresholds.PM10Threshold,
+		thresholds.PM2DeltaTrigger,
+		thresholds.PM10DeltaTrigger,
+		thresholds.HumidityLowThreshold,
+		thresholds.HumidityHighThreshold,
+		thresholds.HumidityDeltaTrigger,
+		thresholds.TemperatureLowThreshold,
+		thresholds.TemperatureHighThreshold,
+		thresholds.TemperatureDeltaTrigger,
 	)
 }
 
 func alertSchema(maxAlerts int) map[string]any {
+	topics := alertTopics()
+
 	return map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
@@ -227,8 +323,12 @@ func alertSchema(maxAlerts int) map[string]any {
 				"items": map[string]any{
 					"type":                 "object",
 					"additionalProperties": false,
-					"required":             []string{"kind", "severity", "title", "message"},
+					"required":             []string{"topic", "kind", "severity", "title", "message"},
 					"properties": map[string]any{
+						"topic": map[string]any{
+							"type": "string",
+							"enum": topics,
+						},
 						"kind": map[string]any{
 							"type": "string",
 							"enum": []string{"alert", "insight", "tip"},
@@ -263,8 +363,32 @@ func extractJSONObject(input string) string {
 	return input[start : end+1]
 }
 
-func normalizeAlerts(alerts []Alert, maxAlerts int) []Alert {
-	output := make([]Alert, 0, len(alerts))
+func alertTopics() []string {
+	return []string{"general", "air_quality", "humidity", "temperature"}
+}
+
+func focusedAlertTopics() []string {
+	return []string{"air_quality", "humidity", "temperature"}
+}
+
+func normalizeAlerts(
+	alerts []Alert,
+	maxAlerts int,
+	summary alertSummary,
+	thresholds AlertThresholds,
+) []Alert {
+	if maxAlerts <= 0 {
+		return []Alert{}
+	}
+
+	topics := focusedAlertTopics()
+	allowedTopics := make(map[string]struct{}, len(topics))
+	for _, topic := range alertTopics() {
+		allowedTopics[topic] = struct{}{}
+	}
+
+	alertsByTopic := make(map[string]Alert, len(topics))
+	var generalAlert *Alert
 
 	for _, alert := range alerts {
 		kind := strings.ToLower(strings.TrimSpace(alert.Kind))
@@ -294,19 +418,425 @@ func normalizeAlerts(alerts []Alert, maxAlerts int) []Alert {
 			continue
 		}
 
-		output = append(output, Alert{
+		topic := normalizeAlertTopic(alert.Topic, title, message, allowedTopics)
+		if topic == "" {
+			continue
+		}
+		severity = normalizeAlertSeverity(topic, severity, summary, thresholds)
+		if severity == "critical" || severity == "warn" {
+			kind = "alert"
+		}
+		normalized := Alert{
+			Topic:    topic,
 			Kind:     kind,
 			Severity: severity,
 			Title:    trimToLength(title, 60),
 			Message:  trimToLength(message, 180),
-		})
+		}
+		if topic == "general" {
+			if generalAlert == nil {
+				alertCopy := normalized
+				generalAlert = &alertCopy
+			}
+			continue
+		}
+		if _, exists := alertsByTopic[topic]; exists {
+			continue
+		}
 
-		if len(output) >= maxAlerts {
+		alertsByTopic[topic] = normalized
+		if len(alertsByTopic) >= len(topics) {
 			break
 		}
 	}
 
+	output := make([]Alert, 0, len(topics))
+	for _, topic := range topics {
+		if alert, ok := alertsByTopic[topic]; ok {
+			output = append(output, alert)
+			if len(output) >= maxAlerts {
+				break
+			}
+		}
+	}
+
+	if isStableSummary(summary, thresholds) {
+		if generalAlert != nil {
+			return []Alert{*generalAlert}
+		}
+		return []Alert{fallbackStableAlertFromSummary(summary)}
+	}
+
+	for _, topic := range topics {
+		if len(output) >= maxAlerts {
+			break
+		}
+		if _, ok := alertsByTopic[topic]; ok {
+			continue
+		}
+		if !topicNeedsFallbackAlert(summary, topic, thresholds) {
+			continue
+		}
+		output = append(output, fallbackAlertForTopic(summary, topic, thresholds))
+	}
+
+	if len(output) > 0 {
+		return output
+	}
+	return fallbackAlerts(summary, maxAlerts, thresholds)
+}
+
+func normalizeAlertTopic(
+	rawTopic string,
+	title string,
+	message string,
+	allowedTopics map[string]struct{},
+) string {
+	topic := strings.ToLower(strings.TrimSpace(rawTopic))
+	if _, ok := allowedTopics[topic]; ok {
+		return topic
+	}
+
+	combined := strings.ToLower(title + " " + message)
+	switch {
+	case strings.Contains(combined, "pm2"),
+		strings.Contains(combined, "pm10"),
+		strings.Contains(combined, "partic"),
+		strings.Contains(combined, "air quality"):
+		if _, ok := allowedTopics["air_quality"]; ok {
+			return "air_quality"
+		}
+	case strings.Contains(combined, "humid"):
+		if _, ok := allowedTopics["humidity"]; ok {
+			return "humidity"
+		}
+	case strings.Contains(combined, "temp"),
+		strings.Contains(combined, "warm"),
+		strings.Contains(combined, "cool"):
+		if _, ok := allowedTopics["temperature"]; ok {
+			return "temperature"
+		}
+	case strings.Contains(combined, "stable"),
+		strings.Contains(combined, "steady"),
+		strings.Contains(combined, "overall"),
+		strings.Contains(combined, "conditions"),
+		strings.Contains(combined, "environment"),
+		strings.Contains(combined, "home"):
+		if _, ok := allowedTopics["general"]; ok {
+			return "general"
+		}
+	}
+
+	return ""
+}
+
+func normalizeAlertSeverity(
+	topic string,
+	severity string,
+	summary alertSummary,
+	thresholds AlertThresholds,
+) string {
+	switch topic {
+	case "air_quality":
+		if summary.Latest.PM2 >= thresholds.PM2Threshold ||
+			summary.Latest.PM10 >= thresholds.PM10Threshold {
+			return bumpAlertSeverity(severity, "warn")
+		}
+	case "humidity":
+		if summary.Latest.Humidity < thresholds.HumidityLowThreshold ||
+			summary.Latest.Humidity >= thresholds.HumidityHighThreshold {
+			return bumpAlertSeverity(severity, "warn")
+		}
+	case "temperature":
+		if summary.Latest.Temperature <= thresholds.TemperatureLowThreshold ||
+			summary.Latest.Temperature >= thresholds.TemperatureHighThreshold {
+			return bumpAlertSeverity(severity, "warn")
+		}
+	}
+
+	return severity
+}
+
+func bumpAlertSeverity(current string, target string) string {
+	severityRank := map[string]int{
+		"info":     1,
+		"warn":     2,
+		"critical": 3,
+	}
+
+	if severityRank[target] > severityRank[current] {
+		return target
+	}
+	return current
+}
+
+func fallbackAlerts(summary alertSummary, maxAlerts int, thresholds AlertThresholds) []Alert {
+	if isStableSummary(summary, thresholds) {
+		return []Alert{fallbackStableAlertFromSummary(summary)}
+	}
+
+	output := make([]Alert, 0, maxAlerts)
+	for _, topic := range focusedAlertTopics() {
+		if !topicNeedsFallbackAlert(summary, topic, thresholds) {
+			continue
+		}
+		output = append(output, fallbackAlertForTopic(summary, topic, thresholds))
+		if len(output) >= maxAlerts {
+			break
+		}
+	}
+	if len(output) == 0 {
+		return []Alert{fallbackStableAlertFromSummary(summary)}
+	}
 	return output
+}
+
+func isStableSummary(summary alertSummary, thresholds AlertThresholds) bool {
+	return !topicNeedsFallbackAlert(summary, "air_quality", thresholds) &&
+		!topicNeedsFallbackAlert(summary, "humidity", thresholds) &&
+		!topicNeedsFallbackAlert(summary, "temperature", thresholds)
+}
+
+func topicNeedsFallbackAlert(summary alertSummary, topic string, thresholds AlertThresholds) bool {
+	switch topic {
+	case "air_quality":
+		return summary.Latest.PM2 >= thresholds.PM2Threshold ||
+			summary.Latest.PM10 >= thresholds.PM10Threshold ||
+			math.Abs(summary.Delta10m.PM2) >= thresholds.PM2DeltaTrigger ||
+			math.Abs(summary.Delta10m.PM10) >= thresholds.PM10DeltaTrigger
+	case "humidity":
+		return summary.Latest.Humidity >= thresholds.HumidityHighThreshold ||
+			summary.Latest.Humidity < thresholds.HumidityLowThreshold ||
+			math.Abs(summary.Delta10m.Humidity) >= thresholds.HumidityDeltaTrigger
+	case "temperature":
+		return summary.Latest.Temperature >= thresholds.TemperatureHighThreshold ||
+			summary.Latest.Temperature <= thresholds.TemperatureLowThreshold ||
+			math.Abs(summary.Delta10m.Temperature) >= thresholds.TemperatureDeltaTrigger
+	default:
+		return false
+	}
+}
+
+func fallbackAlertForTopic(summary alertSummary, topic string, thresholds AlertThresholds) Alert {
+	switch topic {
+	case "air_quality":
+		pm2Delta := summary.Delta10m.PM2
+		pm10Delta := summary.Delta10m.PM10
+
+		if pm2Delta <= -thresholds.PM2DeltaTrigger || pm10Delta <= -thresholds.PM10DeltaTrigger {
+			return Alert{
+				Topic:    topic,
+				Kind:     "insight",
+				Severity: "info",
+				Title:    "Air quality improving",
+				Message: trimToLength(
+					fmt.Sprintf(
+						"PM2.5 fell %.1f ug/m3 and PM10 fell %.1f ug/m3 over 10 min; now %.1f/%.1f ug/m3.",
+						math.Abs(pm2Delta),
+						math.Abs(pm10Delta),
+						summary.Latest.PM2,
+						summary.Latest.PM10,
+					),
+					180,
+				),
+			}
+		}
+		if summary.Latest.PM2 >= thresholds.PM2Threshold ||
+			summary.Latest.PM10 >= thresholds.PM10Threshold ||
+			pm2Delta >= thresholds.PM2DeltaTrigger ||
+			pm10Delta >= thresholds.PM10DeltaTrigger {
+			return Alert{
+				Topic:    topic,
+				Kind:     "alert",
+				Severity: "warn",
+				Title:    "Particulates rising",
+				Message: trimToLength(
+					fmt.Sprintf(
+						"PM2.5 is %.1f ug/m3 and PM10 is %.1f ug/m3, with a 10 min change of %.1f/%.1f ug/m3.",
+						summary.Latest.PM2,
+						summary.Latest.PM10,
+						pm2Delta,
+						pm10Delta,
+					),
+					180,
+				),
+			}
+		}
+		return Alert{
+			Topic:    topic,
+			Kind:     "insight",
+			Severity: "info",
+			Title:    "Air quality steady",
+			Message: trimToLength(
+				fmt.Sprintf(
+					"PM2.5 is %.1f ug/m3 and PM10 is %.1f ug/m3 with no sharp change over the last 10 min.",
+					summary.Latest.PM2,
+					summary.Latest.PM10,
+				),
+				180,
+			),
+		}
+	case "humidity":
+		delta := summary.Delta10m.Humidity
+
+		switch {
+		case summary.Latest.Humidity >= thresholds.HumidityHighThreshold:
+			return Alert{
+				Topic:    topic,
+				Kind:     "alert",
+				Severity: "warn",
+				Title:    "Humidity high",
+				Message: trimToLength(
+					fmt.Sprintf(
+						"Humidity is %.0f%% and may feel muggy. The 10 min change is %.1f points.",
+						summary.Latest.Humidity,
+						delta,
+					),
+					180,
+				),
+			}
+		case summary.Latest.Humidity < thresholds.HumidityLowThreshold:
+			return Alert{
+				Topic:    topic,
+				Kind:     "alert",
+				Severity: "warn",
+				Title:    "Humidity low",
+				Message: trimToLength(
+					fmt.Sprintf(
+						"Humidity is %.0f%% and may feel dry. The 10 min change is %.1f points.",
+						summary.Latest.Humidity,
+						delta,
+					),
+					180,
+				),
+			}
+		case delta <= -thresholds.HumidityDeltaTrigger:
+			return Alert{
+				Topic:    topic,
+				Kind:     "insight",
+				Severity: "info",
+				Title:    "Humidity easing",
+				Message: trimToLength(
+					fmt.Sprintf(
+						"Humidity dropped %.1f points over 10 min and is now %.0f%%.",
+						math.Abs(delta),
+						summary.Latest.Humidity,
+					),
+					180,
+				),
+			}
+		case delta >= thresholds.HumidityDeltaTrigger:
+			return Alert{
+				Topic:    topic,
+				Kind:     "insight",
+				Severity: "info",
+				Title:    "Humidity rising",
+				Message: trimToLength(
+					fmt.Sprintf(
+						"Humidity rose %.1f points over 10 min and is now %.0f%%.",
+						delta,
+						summary.Latest.Humidity,
+					),
+					180,
+				),
+			}
+		default:
+			return Alert{
+				Topic:    topic,
+				Kind:     "insight",
+				Severity: "info",
+				Title:    "Humidity steady",
+				Message: trimToLength(
+					fmt.Sprintf("Humidity is holding around %.0f%%.", summary.Latest.Humidity),
+					180,
+				),
+			}
+		}
+	case "temperature":
+		delta := summary.Delta10m.Temperature
+
+		switch {
+		case summary.Latest.Temperature >= thresholds.TemperatureHighThreshold:
+			return Alert{
+				Topic:    topic,
+				Kind:     "alert",
+				Severity: "warn",
+				Title:    "Temperature high",
+				Message: trimToLength(
+					fmt.Sprintf(
+						"Temperature is %.1fC and may feel warm. The 10 min change is %.1fC.",
+						summary.Latest.Temperature,
+						delta,
+					),
+					180,
+				),
+			}
+		case summary.Latest.Temperature <= thresholds.TemperatureLowThreshold:
+			return Alert{
+				Topic:    topic,
+				Kind:     "alert",
+				Severity: "warn",
+				Title:    "Temperature low",
+				Message: trimToLength(
+					fmt.Sprintf(
+						"Temperature is %.1fC and may feel cool. The 10 min change is %.1fC.",
+						summary.Latest.Temperature,
+						delta,
+					),
+					180,
+				),
+			}
+		case delta <= -thresholds.TemperatureDeltaTrigger:
+			return Alert{
+				Topic:    topic,
+				Kind:     "insight",
+				Severity: "info",
+				Title:    "Temperature cooling",
+				Message: trimToLength(
+					fmt.Sprintf(
+						"Temperature dropped %.1fC over 10 min and is now %.1fC.",
+						math.Abs(delta),
+						summary.Latest.Temperature,
+					),
+					180,
+				),
+			}
+		case delta >= thresholds.TemperatureDeltaTrigger:
+			return Alert{
+				Topic:    topic,
+				Kind:     "insight",
+				Severity: "info",
+				Title:    "Temperature rising",
+				Message: trimToLength(
+					fmt.Sprintf(
+						"Temperature rose %.1fC over 10 min and is now %.1fC.",
+						delta,
+						summary.Latest.Temperature,
+					),
+					180,
+				),
+			}
+		default:
+			return Alert{
+				Topic:    topic,
+				Kind:     "insight",
+				Severity: "info",
+				Title:    "Temperature steady",
+				Message: trimToLength(
+					fmt.Sprintf("Temperature is holding around %.1fC.", summary.Latest.Temperature),
+					180,
+				),
+			}
+		}
+	default:
+		return Alert{
+			Topic:    topic,
+			Kind:     "insight",
+			Severity: "info",
+			Title:    "Conditions stable",
+			Message:  "Telemetry is stable across the monitored window.",
+		}
+	}
 }
 
 func trimToLength(input string, maxLength int) string {
@@ -317,9 +847,12 @@ func trimToLength(input string, maxLength int) string {
 }
 
 func fallbackStableAlert(readings []SensorReading) Alert {
-	summary := buildAlertSummary(readings)
+	return fallbackStableAlertFromSummary(buildAlertSummary(readings))
+}
+
+func fallbackStableAlertFromSummary(summary alertSummary) Alert {
 	message := fmt.Sprintf(
-		"Air is stable. PM2.5 %.1f ug/m3, PM10 %.1f ug/m3, humidity %.0f%%, temperature %.1fC.",
+		"Conditions are stable. PM2.5 %.1f ug/m3, PM10 %.1f ug/m3, humidity %.0f%%, temperature %.1fC.",
 		summary.Latest.PM2,
 		summary.Latest.PM10,
 		summary.Latest.Humidity,
@@ -327,9 +860,10 @@ func fallbackStableAlert(readings []SensorReading) Alert {
 	)
 
 	return Alert{
+		Topic:    "general",
 		Kind:     "insight",
 		Severity: "info",
-		Title:    "Air quality stable",
+		Title:    "Home conditions stable",
 		Message:  trimToLength(message, 180),
 	}
 }

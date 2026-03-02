@@ -46,8 +46,14 @@ Range mode notes:
 - `OPENAI_INSIGHTS_EVENT_MIN_INTERVAL` (default: `10m`)
 - `OPENAI_INSIGHTS_PM2_TRIGGER` (default: `8`)
 - `OPENAI_INSIGHTS_PM10_TRIGGER` (default: `30`)
-- `OPENAI_INSIGHTS_PM2_DELTA_TRIGGER` (default: `5`; upward jump threshold)
-- `OPENAI_INSIGHTS_PM10_DELTA_TRIGGER` (default: `15`; upward jump threshold)
+- `OPENAI_INSIGHTS_PM2_DELTA_TRIGGER` (default: `5`; 10 minute material-change threshold)
+- `OPENAI_INSIGHTS_PM10_DELTA_TRIGGER` (default: `15`; 10 minute material-change threshold)
+- `OPENAI_INSIGHTS_HUMIDITY_LOW_TRIGGER` (default: `40`)
+- `OPENAI_INSIGHTS_HUMIDITY_HIGH_TRIGGER` (default: `60`)
+- `OPENAI_INSIGHTS_HUMIDITY_DELTA_TRIGGER` (default: `8`; 10 minute material-change threshold)
+- `OPENAI_INSIGHTS_TEMPERATURE_LOW_TRIGGER` (default: `18`)
+- `OPENAI_INSIGHTS_TEMPERATURE_HIGH_TRIGGER` (default: `26`)
+- `OPENAI_INSIGHTS_TEMPERATURE_DELTA_TRIGGER` (default: `1.5`; 10 minute material-change threshold)
 - `OPENAI_INSIGHTS_ANALYZE_TIMEOUT` (default: `15s`)
 - `RETENTION_ENABLED` (default: `true`)
 - `RETENTION_DAYS` (default: `60`)
@@ -75,7 +81,7 @@ By default, readings older than 60 days are deleted in batches every 24 hours.
 
 Insights are precomputed in the backend, not generated per request.
 - Scheduled recompute at `OPENAI_INSIGHTS_REFRESH_INTERVAL`
-- Event-triggered recompute on significant PM threshold crossings or jumps
+- Event-triggered recompute on significant threshold crossings or material changes
 - `/api/insights` returns the latest stored snapshot
 - Latest snapshot is persisted in Postgres and restored on backend restart
 

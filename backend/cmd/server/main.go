@@ -64,6 +64,12 @@ func main() {
 		insightsPM10Trigger := floatOrDefault("OPENAI_INSIGHTS_PM10_TRIGGER", 30.0)
 		insightsPM2DeltaTrigger := floatOrDefault("OPENAI_INSIGHTS_PM2_DELTA_TRIGGER", 5.0)
 		insightsPM10DeltaTrigger := floatOrDefault("OPENAI_INSIGHTS_PM10_DELTA_TRIGGER", 15.0)
+		insightsHumidityLowTrigger := floatOrDefault("OPENAI_INSIGHTS_HUMIDITY_LOW_TRIGGER", 40.0)
+		insightsHumidityHighTrigger := floatOrDefault("OPENAI_INSIGHTS_HUMIDITY_HIGH_TRIGGER", 60.0)
+		insightsHumidityDeltaTrigger := floatOrDefault("OPENAI_INSIGHTS_HUMIDITY_DELTA_TRIGGER", 8.0)
+		insightsTemperatureLowTrigger := floatOrDefault("OPENAI_INSIGHTS_TEMPERATURE_LOW_TRIGGER", 18.0)
+		insightsTemperatureHighTrigger := floatOrDefault("OPENAI_INSIGHTS_TEMPERATURE_HIGH_TRIGGER", 26.0)
+		insightsTemperatureDeltaTrigger := floatOrDefault("OPENAI_INSIGHTS_TEMPERATURE_DELTA_TRIGGER", 1.5)
 		insightsAnalyzeTimeout := durationOrDefault("OPENAI_INSIGHTS_ANALYZE_TIMEOUT", 15*time.Second)
 
 		alertAnalyzer := server.NewOpenAIAlertAnalyzer(
@@ -71,6 +77,18 @@ func main() {
 			insightsModel,
 			insightsBaseURL,
 			insightsMax,
+			server.AlertThresholds{
+				PM2Threshold:             insightsPM2Trigger,
+				PM10Threshold:            insightsPM10Trigger,
+				PM2DeltaTrigger:          insightsPM2DeltaTrigger,
+				PM10DeltaTrigger:         insightsPM10DeltaTrigger,
+				HumidityLowThreshold:     insightsHumidityLowTrigger,
+				HumidityHighThreshold:    insightsHumidityHighTrigger,
+				HumidityDeltaTrigger:     insightsHumidityDeltaTrigger,
+				TemperatureLowThreshold:  insightsTemperatureLowTrigger,
+				TemperatureHighThreshold: insightsTemperatureHighTrigger,
+				TemperatureDeltaTrigger:  insightsTemperatureDeltaTrigger,
+			},
 		)
 		options = append(
 			options,

@@ -62,6 +62,7 @@ type InsightsScheduler struct {
 	hasSnapshot      bool
 	lastReading      *SensorReading
 	lastEventTrigger time.Time
+	lastEventDirection string
 	running          bool
 	pending          bool
 }
@@ -210,24 +211,47 @@ func (scheduler *InsightsScheduler) shouldTriggerFromReading(reading SensorReadi
 	latest := reading
 	scheduler.lastReading = &latest
 
-	pm2Crossed := previous.PM2 < scheduler.config.PM2Threshold &&
+	pm2CrossedHigh := previous.PM2 < scheduler.config.PM2Threshold &&
 		reading.PM2 >= scheduler.config.PM2Threshold
-	pm10Crossed := previous.PM10 < scheduler.config.PM10Threshold &&
+	pm2CrossedLow := previous.PM2 >= scheduler.config.PM2Threshold &&
+		reading.PM2 < scheduler.config.PM2Threshold
+	pm10CrossedHigh := previous.PM10 < scheduler.config.PM10Threshold &&
 		reading.PM10 >= scheduler.config.PM10Threshold
+	pm10CrossedLow := previous.PM10 >= scheduler.config.PM10Threshold &&
+		reading.PM10 < scheduler.config.PM10Threshold
 
-	pm2Jumped := (reading.PM2 - previous.PM2) >= scheduler.config.PM2DeltaTrigger
-	pm10Jumped := (reading.PM10 - previous.PM10) >= scheduler.config.PM10DeltaTrigger
+	pm2Delta := reading.PM2 - previous.PM2
+	pm10Delta := reading.PM10 - previous.PM10
 
-	if !(pm2Crossed || pm10Crossed || pm2Jumped || pm10Jumped) {
+	worsening := pm2CrossedHigh ||
+		pm10CrossedHigh ||
+		pm2Delta >= scheduler.config.PM2DeltaTrigger ||
+		pm10Delta >= scheduler.config.PM10DeltaTrigger
+	improving := pm2CrossedLow ||
+		pm10CrossedLow ||
+		pm2Delta <= -scheduler.config.PM2DeltaTrigger ||
+		pm10Delta <= -scheduler.config.PM10DeltaTrigger
+
+	if !(worsening || improving) {
 		return false
 	}
 
+	eventDirection := "mixed"
+	switch {
+	case worsening && !improving:
+		eventDirection = "worsening"
+	case improving && !worsening:
+		eventDirection = "improving"
+	}
+
 	if !scheduler.lastEventTrigger.IsZero() &&
-		now.Sub(scheduler.lastEventTrigger) < scheduler.config.EventMinInterval {
+		now.Sub(scheduler.lastEventTrigger) < scheduler.config.EventMinInterval &&
+		scheduler.lastEventDirection == eventDirection {
 		return false
 	}
 
 	scheduler.lastEventTrigger = now
+	scheduler.lastEventDirection = eventDirection
 	return true
 }
 
