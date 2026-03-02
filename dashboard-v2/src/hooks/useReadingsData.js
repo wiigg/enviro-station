@@ -43,7 +43,8 @@ function useReadingsHistoryWindows({
       const normalized = normalizeReadings(payload.readings);
       historyCacheRef.current[targetWindowId] = {
         readings: normalized,
-        fetchedAt: Date.now()
+        fetchedAt: Date.now(),
+        isHydrated: true
       };
       return normalized;
     },
@@ -63,7 +64,9 @@ function useReadingsHistoryWindows({
     }
 
     const shouldRevalidate =
-      !cacheEntry || Date.now() - cacheEntry.fetchedAt > selectedWindow.cacheTtlMs;
+      !cacheEntry ||
+      !cacheEntry.isHydrated ||
+      Date.now() - cacheEntry.fetchedAt > selectedWindow.cacheTtlMs;
     if (!shouldRevalidate) {
       return () => {
         abortController.abort();
@@ -117,7 +120,10 @@ function useReadingsHistoryWindows({
 
         const targetWindow = WINDOW_OPTIONS_BY_ID[targetWindowId];
         const cacheEntry = historyCacheRef.current[targetWindowId];
-        if (cacheEntry && Date.now() - cacheEntry.fetchedAt <= targetWindow.cacheTtlMs) {
+        if (
+          cacheEntry?.isHydrated &&
+          Date.now() - cacheEntry.fetchedAt <= targetWindow.cacheTtlMs
+        ) {
           continue;
         }
 
@@ -192,7 +198,8 @@ function useReadingsStreamConnection({
 
             historyCacheRef.current[targetWindowId] = {
               readings: nextReadings,
-              fetchedAt: streamUpdatedAt
+              fetchedAt: streamUpdatedAt,
+              isHydrated: cacheEntry?.isHydrated ?? false
             };
 
             if (selectedWindowIdRef.current === targetWindowId) {
@@ -210,7 +217,8 @@ function useReadingsStreamConnection({
               );
               historyCacheRef.current["7d"] = {
                 readings: nextReadings,
-                fetchedAt: streamUpdatedAt
+                fetchedAt: streamUpdatedAt,
+                isHydrated: cacheEntry.isHydrated ?? false
               };
               setReadings(nextReadings);
             }
