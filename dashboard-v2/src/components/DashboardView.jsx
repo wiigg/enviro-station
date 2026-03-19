@@ -41,6 +41,9 @@ function statusLabel(status) {
   if (status === "live") {
     return "Connected";
   }
+  if (status === "waiting") {
+    return "Waiting for data";
+  }
   if (status === "degraded") {
     return "Reconnecting";
   }
@@ -53,6 +56,9 @@ function statusLabel(status) {
 function statusClassName(status) {
   if (status === "live") {
     return "statusLive";
+  }
+  if (status === "waiting") {
+    return "statusWaiting";
   }
   if (status === "degraded") {
     return "statusDegraded";

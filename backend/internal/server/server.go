@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -30,7 +31,9 @@ type readingsRangeStore interface {
 type API struct {
 	store                   Store
 	ingestAPIKey            string
+	trustProxyIP            bool
 	stream                  *streamHub
+	live                    *liveBuffer
 	alertAnalyzer           AlertAnalyzer
 	insightsEngine          InsightsEngine
 	insightsSchedulerConfig InsightsSchedulerConfig
@@ -41,6 +44,7 @@ type API struct {
 	deviceStateKnown bool
 	deviceConnected  bool
 	lastDeviceSeenAt time.Time
+	liveBufferLimit         int
 }
 
 type APIOption func(*API)
@@ -63,9 +67,21 @@ func WithInsightsSchedulerConfig(config InsightsSchedulerConfig) APIOption {
 	}
 }
 
+func WithTrustProxyIP(enabled bool) APIOption {
+	return func(api *API) {
+		api.trustProxyIP = enabled
+	}
+}
+
 func WithOpsConfig(config OpsConfig) APIOption {
 	return func(api *API) {
 		api.opsConfig = config
+	}
+}
+
+func WithLiveBufferLimit(limit int) APIOption {
+	return func(api *API) {
+		api.liveBufferLimit = limit
 	}
 }
 
@@ -77,10 +93,12 @@ func NewAPI(store Store, ingestAPIKey string, options ...APIOption) *API {
 		stream:                  newStreamHub(),
 		insightsSchedulerConfig: DefaultInsightsSchedulerConfig(),
 		opsConfig:               DefaultOpsConfig(),
+		liveBufferLimit:         3600,
 	}
 	for _, option := range options {
 		option(api)
 	}
+	api.live = newLiveBuffer(api.liveBufferLimit)
 
 	if api.insightsEngine == nil && api.alertAnalyzer != nil {
 		scheduler := NewInsightsScheduler(store, api.alertAnalyzer, api.insightsSchedulerConfig)
@@ -109,6 +127,7 @@ func (api *API) Handler() http.Handler {
 	mux.HandleFunc("/ready", api.handleReady)
 	mux.HandleFunc("/api/ingest", api.handleIngest)
 	mux.HandleFunc("/api/ingest/batch", api.handleIngestBatch)
+	mux.HandleFunc("/api/live", api.handleLive)
 	mux.HandleFunc("/api/readings", api.handleReadings)
 	mux.HandleFunc("/api/stream", api.handleStream)
 	mux.HandleFunc("/api/insights", api.handleInsights)
@@ -163,15 +182,39 @@ func (api *API) handleIngest(response http.ResponseWriter, request *http.Request
 	}
 
 	if err := api.store.Add(request.Context(), reading); err != nil {
+		if errors.Is(err, ErrStoreUnavailable) {
+			api.onTelemetryReceived(time.Now())
+			api.publishLive(reading)
+			if api.insightsEngine != nil {
+				api.insightsEngine.OnReading(reading)
+			}
+			log.Printf(
+				"reading accepted path=%s persisted=false timestamp=%d remote=%s",
+				request.URL.Path,
+				reading.Timestamp,
+				request.RemoteAddr,
+			)
+			writeJSON(response, http.StatusAccepted, map[string]any{
+				"status":    "accepted",
+				"persisted": false,
+			})
+			return
+		}
 		writeError(response, http.StatusInternalServerError, "failed to persist reading")
 		return
 	}
 
 	api.onTelemetryReceived(time.Now())
-	api.stream.publish(reading)
+	api.publishLive(reading)
 	if api.insightsEngine != nil {
 		api.insightsEngine.OnReading(reading)
 	}
+	log.Printf(
+		"reading accepted path=%s persisted=true timestamp=%d remote=%s",
+		request.URL.Path,
+		reading.Timestamp,
+		request.RemoteAddr,
+	)
 	writeJSON(response, http.StatusAccepted, map[string]string{"status": "accepted"})
 }
 
@@ -199,6 +242,29 @@ func (api *API) handleIngestBatch(response http.ResponseWriter, request *http.Re
 	}
 
 	if err := api.store.AddBatch(request.Context(), readings); err != nil {
+		if errors.Is(err, ErrStoreUnavailable) {
+			if len(readings) > 0 {
+				api.onTelemetryReceived(time.Now())
+			}
+			for _, reading := range readings {
+				api.publishLive(reading)
+			}
+			if api.insightsEngine != nil {
+				api.insightsEngine.OnBatch(readings)
+			}
+			log.Printf(
+				"batch accepted path=%s persisted=false count=%d remote=%s",
+				request.URL.Path,
+				len(readings),
+				request.RemoteAddr,
+			)
+			writeJSON(response, http.StatusAccepted, map[string]any{
+				"status":    "accepted",
+				"ingested":  len(readings),
+				"persisted": false,
+			})
+			return
+		}
 		writeError(response, http.StatusInternalServerError, "failed to persist readings")
 		return
 	}
@@ -207,16 +273,56 @@ func (api *API) handleIngestBatch(response http.ResponseWriter, request *http.Re
 		api.onTelemetryReceived(time.Now())
 	}
 	for _, reading := range readings {
-		api.stream.publish(reading)
+		api.publishLive(reading)
 	}
 	if api.insightsEngine != nil {
 		api.insightsEngine.OnBatch(readings)
 	}
+	log.Printf(
+		"batch accepted path=%s persisted=true count=%d remote=%s",
+		request.URL.Path,
+		len(readings),
+		request.RemoteAddr,
+	)
 
 	writeJSON(response, http.StatusAccepted, map[string]any{
 		"status":   "accepted",
 		"ingested": len(readings),
 	})
+}
+
+func (api *API) handleLive(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writeError(response, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	if !api.authorizeIngestRequest(response, request) {
+		return
+	}
+
+	request.Body = http.MaxBytesReader(response, request.Body, maxIngestBodyBytes)
+	payload, err := io.ReadAll(request.Body)
+	if err != nil {
+		writeError(response, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	reading, err := DecodeReading(payload)
+	if err != nil {
+		writeError(response, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	api.onTelemetryReceived(time.Now())
+	api.publishLive(reading)
+	log.Printf(
+		"reading accepted path=%s persisted=false timestamp=%d remote=%s",
+		request.URL.Path,
+		reading.Timestamp,
+		request.RemoteAddr,
+	)
+	writeJSON(response, http.StatusAccepted, map[string]string{"status": "accepted"})
 }
 
 func (api *API) handleReadings(response http.ResponseWriter, request *http.Request) {
@@ -275,6 +381,10 @@ func (api *API) handleReadings(response http.ResponseWriter, request *http.Reque
 			maxPoints,
 		)
 		if readingsErr != nil {
+			if errors.Is(readingsErr, ErrStoreUnavailable) {
+				writeError(response, http.StatusServiceUnavailable, "durable history unavailable")
+				return
+			}
 			writeError(response, http.StatusInternalServerError, "failed to read data")
 			return
 		}
@@ -297,10 +407,21 @@ func (api *API) handleReadings(response http.ResponseWriter, request *http.Reque
 		limit = parsedLimit
 	}
 
-	readings, err := api.store.Latest(request.Context(), limit)
-	if err != nil {
-		writeError(response, http.StatusInternalServerError, "failed to read data")
-		return
+	source := strings.TrimSpace(request.URL.Query().Get("source"))
+	var readings []SensorReading
+	if source == "live" {
+		readings = api.live.latest(limit)
+	} else {
+		var err error
+		readings, err = api.store.Latest(request.Context(), limit)
+		if err != nil {
+			if errors.Is(err, ErrStoreUnavailable) {
+				writeError(response, http.StatusServiceUnavailable, "durable history unavailable")
+				return
+			}
+			writeError(response, http.StatusInternalServerError, "failed to read data")
+			return
+		}
 	}
 
 	writeJSON(response, http.StatusOK, map[string]any{"readings": readings})
@@ -441,10 +562,16 @@ func (api *API) handleOpsEvents(response http.ResponseWriter, request *http.Requ
 func (api *API) authorizeIngestRequest(response http.ResponseWriter, request *http.Request) bool {
 	providedKey := request.Header.Get("X-API-Key")
 	if subtle.ConstantTimeCompare([]byte(providedKey), []byte(api.ingestAPIKey)) != 1 {
+		log.Printf("ingest unauthorized path=%s remote=%s", request.URL.Path, request.RemoteAddr)
 		writeError(response, http.StatusUnauthorized, "unauthorized")
 		return false
 	}
 	return true
+}
+
+func (api *API) publishLive(reading SensorReading) {
+	api.live.add(reading)
+	api.stream.publish(reading)
 }
 
 func (api *API) initializeDeviceState() {

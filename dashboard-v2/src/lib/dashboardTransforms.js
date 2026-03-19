@@ -72,6 +72,10 @@ export function downsampleReadings(readings, maxPoints) {
 }
 
 export function buildHistoryUrl(backendBaseUrl, windowOption, nowMs = Date.now()) {
+  if (LIVE_SOURCE_WINDOW_IDS.has(windowOption.id)) {
+    return `${backendBaseUrl}/api/readings?limit=${windowOption.queryMaxPoints}&source=live`;
+  }
+
   const fromTimestamp = nowMs - windowOption.rangeMs;
   return `${backendBaseUrl}/api/readings?from=${fromTimestamp}&to=${nowMs}&max_points=${windowOption.queryMaxPoints}`;
 }
@@ -111,3 +115,4 @@ export function normalizeInsight(rawInsight) {
     kind: normalizedKind
   };
 }
+import { LIVE_SOURCE_WINDOW_IDS } from "./dashboardConfig";

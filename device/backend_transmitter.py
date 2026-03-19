@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import tempfile
+import time
 import urllib.error
 import urllib.request
 
@@ -12,23 +13,26 @@ class BackendTransmitter:
         base_url,
         api_key,
         queue_file="pending_readings.json",
-        batch_size=100,
+        batch_size=1000,
         timeout_seconds=5,
         max_pending=5000,
+        flush_interval_seconds=1800,
     ):
         if not base_url:
             raise ValueError("BACKEND_BASE_URL is required")
         if not api_key:
             raise ValueError("INGEST_API_KEY is required")
 
-        self.ingest_url = base_url.rstrip("/") + "/api/ingest"
+        self.live_url = base_url.rstrip("/") + "/api/live"
         self.batch_url = base_url.rstrip("/") + "/api/ingest/batch"
         self.api_key = api_key
         self.queue_file = queue_file
         self.batch_size = max(1, batch_size)
         self.timeout_seconds = timeout_seconds
         self.max_pending = max(1, max_pending)
+        self.flush_interval_seconds = max(1, flush_interval_seconds)
         self.pending = self._load_pending()
+        self.last_flush_at = time.monotonic()
 
     def send(self, reading):
         self.pending.append(reading)
@@ -40,17 +44,14 @@ class BackendTransmitter:
             self.pending = self.pending[drop_count:]
 
         self._persist_pending()
-        return self.flush()
+        live_ok = self._post_json(self.live_url, reading)
+        if self._flush_due():
+            return self.flush()
+        return live_ok
 
     def flush(self):
         if not self.pending:
-            return True
-
-        if len(self.pending) == 1:
-            if not self._post_json(self.ingest_url, self.pending[0]):
-                return False
-            self.pending = []
-            self._persist_pending()
+            self.last_flush_at = time.monotonic()
             return True
 
         sent = 0
@@ -64,7 +65,13 @@ class BackendTransmitter:
             self.pending = self.pending[sent:]
             self._persist_pending()
 
-        return len(self.pending) == 0
+        flushed_all = len(self.pending) == 0
+        if flushed_all:
+            self.last_flush_at = time.monotonic()
+        return flushed_all
+
+    def _flush_due(self):
+        return time.monotonic() - self.last_flush_at >= self.flush_interval_seconds
 
     def _post_json(self, url, payload):
         body = json.dumps(payload).encode("utf-8")

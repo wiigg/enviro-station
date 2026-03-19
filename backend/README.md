@@ -5,11 +5,13 @@ Ingest endpoints require `INGEST_API_KEY`; read endpoints are public in this ver
 
 ## Endpoints
 
+- `POST /api/live` (requires `X-API-Key`; updates the live stream without writing Postgres)
 - `POST /api/ingest` (requires `X-API-Key`)
-- `POST /api/ingest/batch` (requires `X-API-Key`)
+- `POST /api/ingest/batch` (requires `X-API-Key`; durable batch write to Postgres)
 - `GET /api/stream` (SSE)
 - `GET /api/readings?limit=100`
 - `GET /api/readings?from=...&to=...&max_points=...`
+- `GET /api/readings?limit=100&source=live`
 - `GET /api/insights?limit=3`
 - `GET /api/ops/events?limit=30`
 - `GET /health`
@@ -21,6 +23,7 @@ Ingest endpoints require `INGEST_API_KEY`; read endpoints are public in this ver
 - `limit` mode: latest N rows, e.g. `?limit=100`
 - `range` mode: explicit time window with bounded payload, e.g.
   `?from=1738886400000&to=1738972800000&max_points=7000`
+- `live` mode: in-memory live buffer, e.g. `?limit=900&source=live`
 
 Range mode notes:
 - `from` and `to` must be provided together
@@ -33,10 +36,13 @@ Range mode notes:
 - `PORT` (default: `8080`)
 - `CORS_ALLOW_ORIGIN` (default: `*`; set explicit origins for production)
 - `INGEST_API_KEY` (required)
-- `DATABASE_URL` (required)
+- `DATABASE_URL` (required for durable history and insights persistence)
+- `DATABASE_RECONNECT_INTERVAL` (default: `30s`)
 - `PG_MAX_CONNS` (default: `10`)
 - `OPS_DEVICE_OFFLINE_TIMEOUT` (default: `45s`)
 - `OPS_MONITOR_INTERVAL` (default: `5s`)
+- `TRUST_PROXY_HEADERS` (default: `false`)
+- `LIVE_BUFFER_LIMIT` (default: `3600`)
 - `OPENAI_API_KEY` (optional; enables `/api/insights`)
 - `OPENAI_INSIGHTS_MODEL` (default: `gpt-5-mini`)
 - `OPENAI_BASE_URL` (default: `https://api.openai.com/v1`)
@@ -56,7 +62,7 @@ Range mode notes:
 - `OPENAI_INSIGHTS_TEMPERATURE_DELTA_TRIGGER` (default: `1.5`; 10 minute material-change threshold)
 - `OPENAI_INSIGHTS_ANALYZE_TIMEOUT` (default: `15s`)
 - `RETENTION_ENABLED` (default: `true`)
-- `RETENTION_DAYS` (default: `60`)
+- `RETENTION_DAYS` (default: `14`)
 - `RETENTION_BATCH_SIZE` (default: `5000`)
 - `RETENTION_INTERVAL` (default: `24h`)
 
@@ -75,7 +81,16 @@ go run ./cmd/server
 ## Data retention
 
 Raw readings retention is managed automatically by the backend process.
-By default, readings older than 60 days are deleted in batches every 24 hours.
+By default, readings older than 14 days are deleted in batches every 24 hours.
+
+## Live vs durable ingestion
+
+- `POST /api/live` updates the in-memory live buffer and SSE stream immediately.
+- `POST /api/ingest` falls back to live-only acceptance when Postgres is unavailable.
+- `POST /api/ingest/batch` is intended for delayed durable writes to Postgres.
+- `GET /api/readings?source=live` reads from the in-memory live buffer without touching Postgres.
+- `GET /api/readings` reads persisted history from Postgres.
+- If Postgres is unavailable at boot, the API starts in live-only mode and retries the database in the background.
 
 ## Insights generation model
 

@@ -115,6 +115,10 @@ body {
   background: #2f9f7f;
 }
 
+.chipStatus.statusWaiting {
+  background: #2f5dd0;
+}
+
 .chipStatus.statusDegraded {
   background: #f27a3e;
 }

@@ -8,9 +8,10 @@ Enviro Station is an air quality monitoring platform with three services:
 
 ## Architecture
 
-1. Device reads Enviro+ sensors and posts to backend ingest endpoints.
-2. Backend validates readings, stores data in Postgres, and emits SSE updates.
-3. Dashboard reads history and subscribes to stream updates.
+1. Device reads Enviro+ sensors and publishes live readings to the backend stream.
+2. Device batches durable uploads so the backend writes to Postgres less often.
+3. Dashboard uses the live stream for realtime updates and Postgres for longer-range history.
+4. If Postgres is down, the backend can still boot in live-only mode and retry durable storage later.
 
 ## Repository Layout
 
@@ -55,11 +56,13 @@ uv run python main.py
 
 ## Backend API
 
+- `POST /api/live` (requires `X-API-Key`; live stream only, no Postgres write)
 - `POST /api/ingest` (requires `X-API-Key`)
 - `POST /api/ingest/batch` (requires `X-API-Key`)
-- `GET /api/stream` (SSE)
+- `GET /api/stream` (SSE live stream)
 - `GET /api/readings?limit=...`
 - `GET /api/readings?from=...&to=...&max_points=...`
+- `GET /api/readings?limit=...&source=live`
 - `GET /api/insights?limit=...`
 - `GET /api/ops/events?limit=...`
 - `GET /health`

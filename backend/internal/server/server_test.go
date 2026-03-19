@@ -253,6 +253,119 @@ func TestHandleIngestBatchAcceptsMultipleReadings(t *testing.T) {
 	}
 }
 
+func TestHandleIngestBatchFallsBackToLiveOnlyWhenDurableStoreUnavailable(t *testing.T) {
+	store := NewRuntimeStore(nil)
+	api := NewAPI(store, "secret")
+	handler := api.Handler()
+
+	request := httptest.NewRequest(http.MethodPost, "/api/ingest/batch", bytes.NewBufferString(`[
+		{"timestamp":"1738886400","temperature":"22.4","pressure":"101305","humidity":"40.1","oxidised":"1.2","reduced":"1.1","nh3":"0.7","pm1":"2","pm2":"3","pm10":"4"},
+		{"timestamp":"1738886401","temperature":"22.5","pressure":"101300","humidity":"40.2","oxidised":"1.3","reduced":"1.0","nh3":"0.8","pm1":"3","pm2":"4","pm10":"5"}
+	]`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-API-Key", "secret")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("expected status %d, got %d", http.StatusAccepted, response.Code)
+	}
+
+	readingsRequest := httptest.NewRequest(http.MethodGet, "/api/readings?source=live&limit=2", nil)
+	readingsResponse := httptest.NewRecorder()
+
+	handler.ServeHTTP(readingsResponse, readingsRequest)
+
+	if readingsResponse.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, readingsResponse.Code)
+	}
+
+	var payload struct {
+		Readings []SensorReading `json:"readings"`
+	}
+	if err := json.NewDecoder(readingsResponse.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode readings response: %v", err)
+	}
+
+	if len(payload.Readings) != 2 {
+		t.Fatalf("expected 2 live readings, got %d", len(payload.Readings))
+	}
+}
+
+func TestHandleLivePublishesWithoutPersisting(t *testing.T) {
+	store := &fakeStore{}
+	api := NewAPI(store, "secret")
+	handler := api.Handler()
+
+	request := httptest.NewRequest(http.MethodPost, "/api/live", bytes.NewBufferString(`{
+		"timestamp":"1738886400",
+		"temperature":"22.4",
+		"pressure":"101305",
+		"humidity":"40.1",
+		"oxidised":"1.2",
+		"reduced":"1.1",
+		"nh3":"0.7",
+		"pm1":"2",
+		"pm2":"3",
+		"pm10":"4"
+	}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-API-Key", "secret")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("expected status %d, got %d", http.StatusAccepted, response.Code)
+	}
+	if len(store.added) != 0 {
+		t.Fatalf("expected no persisted readings, got %d", len(store.added))
+	}
+}
+
+func TestHandleIngestFallsBackToLiveOnlyWhenDurableStoreUnavailable(t *testing.T) {
+	store := NewRuntimeStore(nil)
+	api := NewAPI(store, "secret")
+	handler := api.Handler()
+
+	request := httptest.NewRequest(http.MethodPost, "/api/ingest", bytes.NewBufferString(`{
+		"timestamp":"1738886400",
+		"temperature":"22.4",
+		"pressure":"101305",
+		"humidity":"40.1",
+		"oxidised":"1.2",
+		"reduced":"1.1",
+		"nh3":"0.7",
+		"pm1":"2",
+		"pm2":"3",
+		"pm10":"4"
+	}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-API-Key", "secret")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("expected status %d, got %d", http.StatusAccepted, response.Code)
+	}
+
+	readingsRequest := httptest.NewRequest(http.MethodGet, "/api/readings?source=live&limit=1", nil)
+	readingsResponse := httptest.NewRecorder()
+	handler.ServeHTTP(readingsResponse, readingsRequest)
+
+	var payload struct {
+		Readings []SensorReading `json:"readings"`
+	}
+	if err := json.NewDecoder(readingsResponse.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if len(payload.Readings) != 1 {
+		t.Fatalf("expected one live reading, got %d", len(payload.Readings))
+	}
+}
+
 func TestHandleIngestBatchRejectsOversizedBatch(t *testing.T) {
 	store := &fakeStore{}
 	api := NewAPI(store, "secret")
@@ -380,7 +493,6 @@ func TestHandleReadingsRangeQuery(t *testing.T) {
 		nil,
 	)
 	response := httptest.NewRecorder()
-
 	handler.ServeHTTP(response, request)
 
 	if response.Code != http.StatusOK {
@@ -408,6 +520,85 @@ func TestHandleReadingsRangeRequiresBothBounds(t *testing.T) {
 
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, response.Code)
+	}
+}
+
+func TestHandleReadingsReturnsLiveBufferWithoutStoreQuery(t *testing.T) {
+	store := &fakeStore{
+		latestErr: errors.New("store should not be called"),
+	}
+	api := NewAPI(store, "secret")
+	handler := api.Handler()
+
+	liveRequest := httptest.NewRequest(http.MethodPost, "/api/live", bytes.NewBufferString(`{
+		"timestamp":"1738886400",
+		"temperature":"22.4",
+		"pressure":"101305",
+		"humidity":"40.1",
+		"oxidised":"1.2",
+		"reduced":"1.1",
+		"nh3":"0.7",
+		"pm1":"2",
+		"pm2":"3",
+		"pm10":"4"
+	}`))
+	liveRequest.Header.Set("Content-Type", "application/json")
+	liveRequest.Header.Set("X-API-Key", "secret")
+	liveResponse := httptest.NewRecorder()
+	handler.ServeHTTP(liveResponse, liveRequest)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/readings?source=live&limit=1", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, response.Code)
+	}
+
+	var payload struct {
+		Readings []SensorReading `json:"readings"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if len(payload.Readings) != 1 {
+		t.Fatalf("expected one live reading, got %d", len(payload.Readings))
+	}
+	if payload.Readings[0].Timestamp != 1738886400 {
+		t.Fatalf("expected timestamp 1738886400, got %d", payload.Readings[0].Timestamp)
+	}
+}
+
+func TestHandleReadingsReturnsServiceUnavailableWhenDurableStoreUnavailable(t *testing.T) {
+	store := NewRuntimeStore(nil)
+	api := NewAPI(store, "secret")
+	handler := api.Handler()
+
+	request := httptest.NewRequest(http.MethodGet, "/api/readings?limit=1", nil)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status %d, got %d", http.StatusServiceUnavailable, response.Code)
+	}
+}
+
+func TestHandleReadingsRangeReturnsServiceUnavailableWhenDurableStoreUnavailable(t *testing.T) {
+	store := NewRuntimeStore(nil)
+	api := NewAPI(store, "secret")
+	handler := api.Handler()
+
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/api/readings?from=1738886400000&to=1738889999000&max_points=2",
+		nil,
+	)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status %d, got %d", http.StatusServiceUnavailable, response.Code)
 	}
 }
 

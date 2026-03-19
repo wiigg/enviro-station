@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { normalizeReading, normalizeReadings } from "../lib/readings";
 import { parseJSONResponse } from "../lib/dashboardApi";
 import {
+  LIVE_SOURCE_WINDOW_IDS,
   PREFETCH_WINDOW_IDS,
   STREAM_WINDOW_IDS,
   WINDOW_OPTIONS,
@@ -14,9 +15,11 @@ import {
 
 function useReadingsHistoryWindows({
   backendBaseUrl,
+  hasLiveDataRef,
   historyCacheRef,
   selectedWindow,
   selectedWindowIdRef,
+  syncConnectionStatus,
   setLastError,
   setReadings
 }) {
@@ -59,8 +62,16 @@ function useReadingsHistoryWindows({
     if (cacheEntry) {
       setReadings(cacheEntry.readings);
       setLastError("");
+      if (LIVE_SOURCE_WINDOW_IDS.has(selectedWindow.id)) {
+        hasLiveDataRef.current = cacheEntry.readings.length > 0;
+        syncConnectionStatus();
+      }
     } else {
       setReadings([]);
+      if (LIVE_SOURCE_WINDOW_IDS.has(selectedWindow.id)) {
+        hasLiveDataRef.current = false;
+        syncConnectionStatus();
+      }
     }
 
     const shouldRevalidate =
@@ -82,6 +93,10 @@ function useReadingsHistoryWindows({
         if (selectedWindowIdRef.current === selectedWindow.id) {
           setReadings(normalized);
         }
+        if (LIVE_SOURCE_WINDOW_IDS.has(selectedWindow.id)) {
+          hasLiveDataRef.current = normalized.length > 0;
+          syncConnectionStatus();
+        }
         setLastError("");
       } catch (error) {
         if (closed || abortController.signal.aborted) {
@@ -100,10 +115,12 @@ function useReadingsHistoryWindows({
     };
   }, [
     historyCacheRef,
+    hasLiveDataRef,
     loadReadingsWindow,
     selectedWindow.cacheTtlMs,
     selectedWindow.id,
     selectedWindowIdRef,
+    syncConnectionStatus,
     setLastError,
     setReadings
   ]);
@@ -155,6 +172,8 @@ function useReadingsStreamConnection({
   backendBaseUrl,
   historyCacheRef,
   selectedWindowIdRef,
+  streamOpenedRef,
+  syncConnectionStatus,
   setConnectionStatus,
   setLastError,
   setReadings
@@ -235,7 +254,8 @@ function useReadingsStreamConnection({
       eventSource.onmessage = handleReading;
 
       eventSource.onopen = () => {
-        setConnectionStatus("live");
+        streamOpenedRef.current = true;
+        syncConnectionStatus();
         retryDelayMs = 1000;
       };
 
@@ -268,6 +288,7 @@ function useReadingsStreamConnection({
     backendBaseUrl,
     historyCacheRef,
     selectedWindowIdRef,
+    syncConnectionStatus,
     setConnectionStatus,
     setLastError,
     setReadings
@@ -298,8 +319,10 @@ export function useReadingsData(backendBaseUrl) {
   const [connectionStatus, setConnectionStatus] = useState("connecting");
   const [lastError, setLastError] = useState("");
 
+  const hasLiveDataRef = useRef(false);
   const historyCacheRef = useRef({});
   const selectedWindowIdRef = useRef(windowId);
+  const streamOpenedRef = useRef(false);
 
   const selectedWindow = useMemo(
     () => WINDOW_OPTIONS_BY_ID[windowId] ?? WINDOW_OPTIONS[0],
@@ -310,11 +333,25 @@ export function useReadingsData(backendBaseUrl) {
     selectedWindowIdRef.current = windowId;
   }, [windowId]);
 
+  const syncConnectionStatus = useCallback(() => {
+    setConnectionStatus((previousStatus) => {
+      if (previousStatus === "degraded") {
+        return previousStatus;
+      }
+      if (!streamOpenedRef.current) {
+        return "connecting";
+      }
+      return hasLiveDataRef.current ? "live" : "waiting";
+    });
+  }, []);
+
   useReadingsHistoryWindows({
     backendBaseUrl,
+    hasLiveDataRef,
     historyCacheRef,
     selectedWindow,
     selectedWindowIdRef,
+    syncConnectionStatus,
     setLastError,
     setReadings
   });
@@ -323,6 +360,8 @@ export function useReadingsData(backendBaseUrl) {
     backendBaseUrl,
     historyCacheRef,
     selectedWindowIdRef,
+    streamOpenedRef,
+    syncConnectionStatus,
     setConnectionStatus,
     setLastError,
     setReadings

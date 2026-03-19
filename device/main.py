@@ -17,9 +17,10 @@ def main():
     backend_base_url = os.getenv("BACKEND_BASE_URL")
     ingest_api_key = os.getenv("INGEST_API_KEY")
     queue_file = os.getenv("DEVICE_QUEUE_FILE", "pending_readings.json")
-    batch_size = int(os.getenv("DEVICE_BATCH_SIZE", "100"))
+    batch_size = int(os.getenv("DEVICE_BATCH_SIZE", "1000"))
     timeout_seconds = int(os.getenv("DEVICE_HTTP_TIMEOUT_SECONDS", "5"))
     max_pending = int(os.getenv("DEVICE_MAX_PENDING", "5000"))
+    flush_interval_seconds = int(os.getenv("DEVICE_FLUSH_INTERVAL_SECONDS", "1800"))
     logging.basicConfig(level=logging.INFO)
 
     # Log Raspberry Pi serial and Wi-Fi status
@@ -37,6 +38,7 @@ def main():
         batch_size=batch_size,
         timeout_seconds=timeout_seconds,
         max_pending=max_pending,
+        flush_interval_seconds=flush_interval_seconds,
     )
     transmitter.flush()
 
@@ -49,6 +51,7 @@ def main():
             device.display_status()
             time.sleep(UPDATE_INTERVAL)
         except KeyboardInterrupt:
+            transmitter.flush()
             logging.info("Shutting down device loop.")
             break
         except Exception as e:
