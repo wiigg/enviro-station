@@ -38,7 +38,7 @@ func TestShouldTriggerFromReadingPM2IncreaseJump(t *testing.T) {
 	}
 }
 
-func TestShouldNotTriggerFromReadingPM2DecreaseJump(t *testing.T) {
+func TestShouldTriggerFromReadingPM2DecreaseJump(t *testing.T) {
 	scheduler := NewInsightsScheduler(&fakeStore{}, &fakeAlertAnalyzer{}, testInsightsSchedulerConfig())
 
 	if scheduler.shouldTriggerFromReading(SensorReading{
@@ -49,12 +49,12 @@ func TestShouldNotTriggerFromReadingPM2DecreaseJump(t *testing.T) {
 		t.Fatalf("expected first reading to initialize state without triggering")
 	}
 
-	if scheduler.shouldTriggerFromReading(SensorReading{
+	if !scheduler.shouldTriggerFromReading(SensorReading{
 		Timestamp: 1738886460000,
 		PM2:       8.5,
 		PM10:      11.7,
 	}) {
-		t.Fatalf("expected PM2 drop not to trigger recompute")
+		t.Fatalf("expected material PM2 drop to trigger recompute")
 	}
 }
 
