@@ -34,6 +34,7 @@ type API struct {
 	trustProxyIP            bool
 	stream                  *streamHub
 	live                    *liveBuffer
+	ops                     *opsEventBuffer
 	alertAnalyzer           AlertAnalyzer
 	insightsEngine          InsightsEngine
 	insightsSchedulerConfig InsightsSchedulerConfig
@@ -44,7 +45,7 @@ type API struct {
 	deviceStateKnown bool
 	deviceConnected  bool
 	lastDeviceSeenAt time.Time
-	liveBufferLimit         int
+	liveBufferLimit  int
 }
 
 type APIOption func(*API)
@@ -91,6 +92,7 @@ func NewAPI(store Store, ingestAPIKey string, options ...APIOption) *API {
 		store:                   store,
 		ingestAPIKey:            normalizedIngestAPIKey,
 		stream:                  newStreamHub(),
+		ops:                     newOpsEventBuffer(maxOpsEventsLimit),
 		insightsSchedulerConfig: DefaultInsightsSchedulerConfig(),
 		opsConfig:               DefaultOpsConfig(),
 		liveBufferLimit:         3600,
@@ -531,11 +533,6 @@ func (api *API) handleOpsEvents(response http.ResponseWriter, request *http.Requ
 		return
 	}
 
-	if api.opsEventStore == nil {
-		writeJSON(response, http.StatusOK, map[string]any{"events": []OpsEvent{}})
-		return
-	}
-
 	limit := 30
 	if rawLimit := request.URL.Query().Get("limit"); rawLimit != "" {
 		parsedLimit, err := strconv.Atoi(rawLimit)
@@ -550,8 +547,17 @@ func (api *API) handleOpsEvents(response http.ResponseWriter, request *http.Requ
 		limit = parsedLimit
 	}
 
+	if api.opsEventStore == nil {
+		writeJSON(response, http.StatusOK, map[string]any{"events": api.ops.latest(limit)})
+		return
+	}
+
 	events, err := api.opsEventStore.LatestOpsEvents(request.Context(), limit)
 	if err != nil {
+		if errors.Is(err, ErrStoreUnavailable) {
+			writeJSON(response, http.StatusOK, map[string]any{"events": api.ops.latest(limit)})
+			return
+		}
 		writeError(response, http.StatusInternalServerError, "failed to load ops events")
 		return
 	}
@@ -683,6 +689,14 @@ func (api *API) evaluateDeviceDisconnect(now time.Time) {
 }
 
 func (api *API) persistOpsEvent(kind string, title string, detail string, timestamp int64) {
+	event := OpsEvent{
+		Timestamp: timestamp,
+		Kind:      kind,
+		Title:     title,
+		Detail:    detail,
+	}
+	api.ops.add(event)
+
 	if api.opsEventStore == nil {
 		return
 	}
@@ -691,12 +705,7 @@ func (api *API) persistOpsEvent(kind string, title string, detail string, timest
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 
-		if err := api.opsEventStore.AddOpsEvent(ctx, OpsEvent{
-			Timestamp: timestamp,
-			Kind:      kind,
-			Title:     title,
-			Detail:    detail,
-		}); err != nil {
+		if err := api.opsEventStore.AddOpsEvent(ctx, event); err != nil {
 			log.Printf("ops event persist failed kind=%s: %v", kind, err)
 		}
 	}()

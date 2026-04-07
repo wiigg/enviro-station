@@ -126,6 +126,70 @@ function useReadingsHistoryWindows({
   ]);
 
   useEffect(() => {
+    if (LIVE_SOURCE_WINDOW_IDS.has(selectedWindow.id)) {
+      return undefined;
+    }
+
+    let closed = false;
+    let timerId = null;
+    let activeAbortController = null;
+
+    const schedule = () => {
+      timerId = window.setTimeout(runRefresh, selectedWindow.cacheTtlMs);
+    };
+
+    async function runRefresh() {
+      activeAbortController = new AbortController();
+
+      try {
+        const normalized = await loadReadingsWindow(
+          selectedWindow.id,
+          activeAbortController.signal
+        );
+        if (closed || activeAbortController.signal.aborted) {
+          return;
+        }
+        if (selectedWindowIdRef.current === selectedWindow.id) {
+          setReadings(normalized);
+          setLastError("");
+        }
+      } catch (error) {
+        if (closed || activeAbortController.signal.aborted) {
+          return;
+        }
+        if (selectedWindowIdRef.current === selectedWindow.id) {
+          const message = error instanceof Error ? error.message : "History request failed";
+          setLastError(message);
+        }
+      } finally {
+        activeAbortController = null;
+        if (!closed) {
+          schedule();
+        }
+      }
+    }
+
+    schedule();
+
+    return () => {
+      closed = true;
+      if (timerId) {
+        window.clearTimeout(timerId);
+      }
+      if (activeAbortController) {
+        activeAbortController.abort();
+      }
+    };
+  }, [
+    loadReadingsWindow,
+    selectedWindow.cacheTtlMs,
+    selectedWindow.id,
+    selectedWindowIdRef,
+    setLastError,
+    setReadings
+  ]);
+
+  useEffect(() => {
     let closed = false;
     const abortControllers = [];
 
@@ -222,23 +286,6 @@ function useReadingsStreamConnection({
             };
 
             if (selectedWindowIdRef.current === targetWindowId) {
-              setReadings(nextReadings);
-            }
-          }
-
-          if (selectedWindowIdRef.current === "7d") {
-            const cacheEntry = historyCacheRef.current["7d"];
-            if (cacheEntry?.readings?.length) {
-              const nextReadings = appendReadingForWindow(
-                cacheEntry.readings,
-                reading,
-                WINDOW_OPTIONS_BY_ID["7d"]
-              );
-              historyCacheRef.current["7d"] = {
-                readings: nextReadings,
-                fetchedAt: streamUpdatedAt,
-                isHydrated: cacheEntry.isHydrated ?? false
-              };
               setReadings(nextReadings);
             }
           }

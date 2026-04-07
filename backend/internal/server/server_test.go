@@ -846,6 +846,43 @@ func TestHandleOpsEventsRejectsInvalidLimit(t *testing.T) {
 	}
 }
 
+func TestHandleOpsEventsReturnsBufferedEventsWhenDurableStoreUnavailable(t *testing.T) {
+	store := NewRuntimeStore(nil)
+	api := NewAPI(store, "secret")
+	api.persistOpsEvent(
+		"device_connected",
+		"Device connected",
+		"Telemetry ingest resumed.",
+		1738886400000,
+	)
+	handler := api.Handler()
+
+	request := httptest.NewRequest(http.MethodGet, "/api/ops/events?limit=2", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, response.Code)
+	}
+
+	var payload struct {
+		Events []OpsEvent `json:"events"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+
+	if len(payload.Events) != 2 {
+		t.Fatalf("expected two buffered events, got %d", len(payload.Events))
+	}
+	if payload.Events[0].Kind != "device_connected" {
+		t.Fatalf("expected most recent buffered event to be device_connected, got %q", payload.Events[0].Kind)
+	}
+	if payload.Events[1].Kind != "backend_restarted" {
+		t.Fatalf("expected buffered backend_restarted event, got %q", payload.Events[1].Kind)
+	}
+}
+
 func TestDeviceConnectivityEventsArePersisted(t *testing.T) {
 	store := &fakeOpsStore{fakeStore: &fakeStore{}}
 	api := NewAPI(

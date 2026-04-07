@@ -16,13 +16,15 @@ export function normalizeOpsEvent(rawEvent) {
     return null;
   }
 
-  const title = typeof rawEvent.title === "string" ? rawEvent.title.trim() : "";
-  const detail = typeof rawEvent.detail === "string" ? rawEvent.detail.trim() : "";
+  const rawTitle = typeof rawEvent.title === "string" ? rawEvent.title.trim() : "";
+  const rawDetail = typeof rawEvent.detail === "string" ? rawEvent.detail.trim() : "";
   const timestampRaw =
     typeof rawEvent.timestamp === "number" ? rawEvent.timestamp : Number(rawEvent.timestamp);
-  if (!title || !detail || !Number.isFinite(timestampRaw)) {
+  if (!rawTitle || !rawDetail || !Number.isFinite(timestampRaw)) {
     return null;
   }
+
+  const { title, detail } = normalizeOpsEventCopy(rawTitle, rawDetail);
 
   const idRaw = rawEvent.id;
   const id =
@@ -36,6 +38,30 @@ export function normalizeOpsEvent(rawEvent) {
     title,
     detail
   };
+}
+
+function normalizeOpsEventCopy(title, detail) {
+  const loweredTitle = title.toLowerCase();
+  const loweredDetail = detail.toLowerCase();
+  const historyLoadMatch = loweredDetail.match(/readings loaded for (.+) window/);
+  const isLegacyHistoryLoad =
+    (loweredTitle === "history loaded" || loweredTitle === "history synced") &&
+    historyLoadMatch;
+
+  if (isLegacyHistoryLoad) {
+    const windowLabel = historyLoadMatch[1];
+    const detailCopy =
+      windowLabel === "live" || windowLabel === "1h"
+        ? "Loaded recent readings from backend live buffer."
+        : "Loaded persisted history from db.";
+
+    return {
+      title: "History loaded",
+      detail: detailCopy
+    };
+  }
+
+  return { title, detail };
 }
 
 export function computeTemperatureDomain(readings) {
@@ -71,17 +97,28 @@ export function downsampleReadings(readings, maxPoints) {
   return readings.filter((_, index) => index % stride === 0);
 }
 
+export function filterVisibleReadings(readings, rangeMs) {
+  if (!Array.isArray(readings) || readings.length === 0) {
+    return [];
+  }
+
+  const latestTimestamp = readings[readings.length - 1].timestamp;
+  const cutoffTimestamp = latestTimestamp - rangeMs;
+  return readings.filter((reading) => reading.timestamp >= cutoffTimestamp);
+}
+
 export function buildHistoryUrl(backendBaseUrl, windowOption, nowMs = Date.now()) {
   if (LIVE_SOURCE_WINDOW_IDS.has(windowOption.id)) {
     return `${backendBaseUrl}/api/readings?limit=${windowOption.queryMaxPoints}&source=live`;
   }
 
-  const fromTimestamp = nowMs - windowOption.rangeMs;
+  const fromTimestamp = nowMs - (windowOption.retainedRangeMs ?? windowOption.rangeMs);
   return `${backendBaseUrl}/api/readings?from=${fromTimestamp}&to=${nowMs}&max_points=${windowOption.queryMaxPoints}`;
 }
 
 export function appendReadingForWindow(readings, reading, windowOption) {
-  const cutoffTimestamp = reading.timestamp - windowOption.rangeMs;
+  const cutoffTimestamp =
+    reading.timestamp - (windowOption.retainedRangeMs ?? windowOption.rangeMs);
   const nextReadings = [...readings, reading].filter(
     (existingReading) => existingReading.timestamp >= cutoffTimestamp
   );

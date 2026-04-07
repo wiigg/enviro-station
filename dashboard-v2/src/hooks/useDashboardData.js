@@ -4,6 +4,7 @@ import { resolveBackendBaseUrl } from "../lib/dashboardApi";
 import { WINDOW_OPTIONS } from "../lib/dashboardConfig";
 import {
   computeTemperatureDomain,
+  filterVisibleReadings,
   downsampleReadings
 } from "../lib/dashboardTransforms";
 import { useInsightsData } from "./useInsightsData";
@@ -29,9 +30,14 @@ export function useDashboardData() {
   } = useInsightsData(backendBaseUrl);
   const { feedItems, feedError, isLoadingFeed } = useOpsFeedData(backendBaseUrl);
 
+  const visibleReadings = useMemo(
+    () => filterVisibleReadings(readings, selectedWindow.rangeMs),
+    [readings, selectedWindow.rangeMs]
+  );
+
   const chartReadings = useMemo(
-    () => downsampleReadings(readings, selectedWindow.chartPoints),
-    [readings, selectedWindow.chartPoints]
+    () => downsampleReadings(visibleReadings, selectedWindow.chartPoints),
+    [visibleReadings, selectedWindow.chartPoints]
   );
 
   const kpis = useMemo(() => buildKpis(readings, windowId), [readings, windowId]);
@@ -47,8 +53,8 @@ export function useDashboardData() {
   );
 
   const temperatureDomain = useMemo(
-    () => computeTemperatureDomain(readings),
-    [readings]
+    () => computeTemperatureDomain(visibleReadings),
+    [visibleReadings]
   );
 
   const axisTickFormatter = useCallback(

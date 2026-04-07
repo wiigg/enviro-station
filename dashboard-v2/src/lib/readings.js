@@ -11,9 +11,11 @@ const NUMERIC_FIELDS = [
   "pm10"
 ];
 
-const DAY_MS = 24 * 60 * 60 * 1000;
+const MINUTE_MS = 60 * 1000;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
 const WEEK_MS = 7 * DAY_MS;
-const HOUR_MS = 60 * 60 * 1000;
+const HOUR_AGO_BASELINE_WINDOW_MS = 10 * MINUTE_MS;
 const NEARBY_YESTERDAY_WINDOW_MS = 90 * 60 * 1000;
 const NEARBY_LAST_WEEK_WINDOW_MS = 12 * HOUR_MS;
 const MIN_BUCKET_SAMPLES = 3;
@@ -58,7 +60,8 @@ export function buildKpis(readings, windowId = "live") {
     ];
   }
 
-  const samples = readings.slice(Math.max(0, readings.length - 30));
+  const visibleReadings = readingsForWindow(readings, latest.timestamp, windowId);
+  const samples = visibleReadings.slice(Math.max(0, visibleReadings.length - 30), -1);
 
   return [
     {
@@ -94,12 +97,35 @@ export function buildKpis(readings, windowId = "live") {
 
 function average(values) {
   if (!values.length) {
-    return 0;
+    return Number.NaN;
   }
   return values.reduce((total, value) => total + value, 0) / values.length;
 }
 
 function metricTrend(readings, samples, latest, field, unit, decimals, windowId) {
+  if (windowId === "live") {
+    const recentBaseline = average(samples.map((item) => item[field]));
+    if (Number.isFinite(recentBaseline)) {
+      return describeDelta(latest[field] - recentBaseline, unit, decimals, "recently");
+    }
+  }
+
+  if (windowId === "1h") {
+    const exactHourAgoBaseline = averageFieldInWindow(
+      readings,
+      latest.timestamp - HOUR_MS,
+      latest.timestamp - HOUR_MS + HOUR_AGO_BASELINE_WINDOW_MS,
+      field
+    );
+    const hourAgoBaseline = Number.isFinite(exactHourAgoBaseline)
+      ? exactHourAgoBaseline
+      : Number.NaN;
+
+    if (Number.isFinite(hourAgoBaseline)) {
+      return describeDelta(latest[field] - hourAgoBaseline, unit, decimals, "an hour ago");
+    }
+  }
+
   if (windowId === "24h") {
     const yesterdayHourBaseline = averageFieldInWindow(
       readings,
@@ -109,7 +135,12 @@ function metricTrend(readings, samples, latest, field, unit, decimals, windowId)
     );
 
     if (Number.isFinite(yesterdayHourBaseline)) {
-      return describeDelta(latest[field] - yesterdayHourBaseline, unit, decimals, "yesterday");
+      return describeDelta(
+        latest[field] - yesterdayHourBaseline,
+        unit,
+        decimals,
+        "same time yesterday"
+      );
     }
 
     const nearbyYesterdayBaseline = averageFieldInWindow(
@@ -120,7 +151,12 @@ function metricTrend(readings, samples, latest, field, unit, decimals, windowId)
     );
 
     if (Number.isFinite(nearbyYesterdayBaseline)) {
-      return describeDelta(latest[field] - nearbyYesterdayBaseline, unit, decimals, "yesterday");
+      return describeDelta(
+        latest[field] - nearbyYesterdayBaseline,
+        unit,
+        decimals,
+        "same time yesterday"
+      );
     }
   }
 
@@ -158,12 +194,27 @@ function metricTrend(readings, samples, latest, field, unit, decimals, windowId)
     }
   }
 
+  const oldestVisibleReading = oldestReadingForWindow(readings, latest.timestamp, windowId);
+  if (oldestVisibleReading && oldestVisibleReading.timestamp < latest.timestamp) {
+    const fallbackReferenceLabel =
+      windowId === "1h"
+        ? "last hour"
+        : referenceLabelForElapsed(latest.timestamp - oldestVisibleReading.timestamp);
+
+    return describeDelta(
+      latest[field] - oldestVisibleReading[field],
+      unit,
+      decimals,
+      fallbackReferenceLabel
+    );
+  }
+
   const baseline = average(samples.map((item) => item[field]));
   if (!Number.isFinite(baseline)) {
     return "Waiting for baseline";
   }
 
-  return describeDelta(latest[field] - baseline, unit, decimals, "recent average");
+  return describeDelta(latest[field] - baseline, unit, decimals, "recently");
 }
 
 function describeDelta(delta, unit, decimals, referenceLabel) {
@@ -210,6 +261,57 @@ function normalizeTimestamp(timestamp) {
 
 function startOfHour(timestamp) {
   return timestamp - (timestamp % HOUR_MS);
+}
+
+function readingsForWindow(readings, latestTimestamp, windowId) {
+  const rangeMs = rangeForWindow(windowId);
+  if (!Number.isFinite(rangeMs)) {
+    return readings;
+  }
+
+  const cutoffTimestamp = latestTimestamp - rangeMs;
+  return readings.filter((reading) => reading.timestamp >= cutoffTimestamp);
+}
+
+function oldestReadingForWindow(readings, latestTimestamp, windowId) {
+  const visibleReadings = readingsForWindow(readings, latestTimestamp, windowId);
+  return visibleReadings[0] ?? null;
+}
+
+function rangeForWindow(windowId) {
+  if (windowId === "live") {
+    return 15 * MINUTE_MS;
+  }
+  if (windowId === "1h") {
+    return HOUR_MS;
+  }
+  if (windowId === "24h") {
+    return DAY_MS;
+  }
+  if (windowId === "7d") {
+    return WEEK_MS;
+  }
+  return Number.NaN;
+}
+
+function referenceLabelForElapsed(elapsedMs) {
+  if (elapsedMs >= DAY_MS) {
+    return formatElapsedLabel(Math.round(elapsedMs / DAY_MS), "day");
+  }
+  if (elapsedMs >= HOUR_MS) {
+    return formatElapsedLabel(Math.round(elapsedMs / HOUR_MS), "hour");
+  }
+  if (elapsedMs >= MINUTE_MS) {
+    return formatElapsedLabel(Math.round(elapsedMs / MINUTE_MS), "minute");
+  }
+  return "moments ago";
+}
+
+function formatElapsedLabel(value, unit) {
+  if (value === 1) {
+    return `1 ${unit} ago`;
+  }
+  return `${value} ${unit}s ago`;
 }
 
 function averageFieldInWindow(readings, startInclusive, endExclusive, field) {
