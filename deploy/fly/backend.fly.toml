@@ -1,0 +1,45 @@
+# Copy to backend/fly.toml and change app/region before deploying.
+# This template favors the lowest idle cost over warm starts.
+
+app = "your-envirostation-api"
+primary_region = "fra"
+kill_signal = "SIGTERM"
+kill_timeout = "5s"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  DATABASE_CONNECT_ON_START = "false"
+  DATABASE_RECONNECT_INTERVAL = "10m"
+  PG_MAX_CONNS = "2"
+  TRUST_PROXY_HEADERS = "true"
+  READ_RATE_LIMIT_REQUESTS = "30"
+  READ_RATE_LIMIT_WINDOW = "1m"
+  LIVE_BUFFER_LIMIT = "1200"
+  OPS_DEVICE_OFFLINE_TIMEOUT = "45m"
+  OPS_MONITOR_INTERVAL = "5m"
+  RETENTION_ENABLED = "true"
+  RETENTION_RUN_ON_START = "false"
+  RETENTION_INTERVAL = "168h"
+  RETENTION_BATCH_SIZE = "1000"
+  OPENAI_INSIGHTS_REFRESH_INTERVAL = "24h"
+  OPENAI_INSIGHTS_EVENT_MIN_INTERVAL = "1h"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 10
+    hard_limit = 20
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

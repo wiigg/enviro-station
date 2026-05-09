@@ -1,0 +1,30 @@
+# Copy to dashboard-v2/fly.toml and change app/region before deploying.
+# Keep the dashboard same-origin and let Nginx proxy /api/* to the API.
+
+app = "your-envirostation-dashboard"
+primary_region = "fra"
+kill_signal = "SIGTERM"
+kill_timeout = "5s"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  API_UPSTREAM = "https://your-envirostation-api.fly.dev"
+
+[http_service]
+  internal_port = 80
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 20
+    hard_limit = 40
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

@@ -8,9 +8,9 @@ Enviro Station is an air quality monitoring platform with three services:
 
 ## Architecture
 
-1. Device reads Enviro+ sensors and publishes live readings to the backend stream.
+1. Device reads Enviro+ sensors and publishes live readings to the backend stream while a dashboard is connected.
 2. Device batches durable uploads so the backend writes to Postgres less often.
-3. Dashboard uses the live stream for realtime updates and Postgres for longer-range history.
+3. Dashboard uses the live stream for realtime updates and device-scoped Postgres buckets for longer-range history.
 4. If Postgres is down, the backend can still boot in live-only mode and retry durable storage later.
 
 ## Repository Layout
@@ -57,6 +57,7 @@ uv run python main.py
 ## Backend API
 
 - `POST /api/live` (requires `X-API-Key`; live stream only, no Postgres write)
+- `GET /api/live/status` (requires `X-API-Key`; optional `device_id`)
 - `POST /api/ingest` (requires `X-API-Key`)
 - `POST /api/ingest/batch` (requires `X-API-Key`)
 - `GET /api/stream` (SSE live stream)
@@ -65,5 +66,13 @@ uv run python main.py
 - `GET /api/readings?limit=...&source=live`
 - `GET /api/insights?limit=...`
 - `GET /api/ops/events?limit=...`
+- `GET /api/ops/events?limit=...&source=live`
 - `GET /health`
 - `GET /ready`
+
+## Fly Deployment
+
+Cost-minimized Fly templates live in `deploy/fly/`.
+They use one `shared-cpu-1x` 256MB Machine per app, `min_machines_running=0`,
+autostop, and lazy backend database connection so live/status cold starts do not
+touch Neon until durable history or batch ingest needs Postgres.
