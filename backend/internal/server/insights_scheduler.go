@@ -28,26 +28,38 @@ type InsightsSnapshotStore interface {
 }
 
 type InsightsSchedulerConfig struct {
-	AnalysisLimit    int
-	RefreshInterval  time.Duration
-	EventMinInterval time.Duration
-	PM2Threshold     float64
-	PM10Threshold    float64
-	PM2DeltaTrigger  float64
-	PM10DeltaTrigger float64
-	AnalyzeTimeout   time.Duration
+	AnalysisLimit            int
+	RefreshInterval          time.Duration
+	EventMinInterval         time.Duration
+	PM2Threshold             float64
+	PM10Threshold            float64
+	PM2DeltaTrigger          float64
+	PM10DeltaTrigger         float64
+	HumidityLowThreshold     float64
+	HumidityHighThreshold    float64
+	HumidityDeltaTrigger     float64
+	TemperatureLowThreshold  float64
+	TemperatureHighThreshold float64
+	TemperatureDeltaTrigger  float64
+	AnalyzeTimeout           time.Duration
 }
 
 func DefaultInsightsSchedulerConfig() InsightsSchedulerConfig {
 	return InsightsSchedulerConfig{
-		AnalysisLimit:    900,
-		RefreshInterval:  time.Hour,
-		EventMinInterval: 10 * time.Minute,
-		PM2Threshold:     8.0,
-		PM10Threshold:    30.0,
-		PM2DeltaTrigger:  5.0,
-		PM10DeltaTrigger: 15.0,
-		AnalyzeTimeout:   15 * time.Second,
+		AnalysisLimit:            900,
+		RefreshInterval:          time.Hour,
+		EventMinInterval:         10 * time.Minute,
+		PM2Threshold:             8.0,
+		PM10Threshold:            30.0,
+		PM2DeltaTrigger:          5.0,
+		PM10DeltaTrigger:         15.0,
+		HumidityLowThreshold:     40.0,
+		HumidityHighThreshold:    60.0,
+		HumidityDeltaTrigger:     8.0,
+		TemperatureLowThreshold:  18.0,
+		TemperatureHighThreshold: 26.0,
+		TemperatureDeltaTrigger:  1.5,
+		AnalyzeTimeout:           15 * time.Second,
 	}
 }
 
@@ -57,14 +69,14 @@ type InsightsScheduler struct {
 	analyzer      AlertAnalyzer
 	config        InsightsSchedulerConfig
 
-	mu               sync.RWMutex
-	snapshot         InsightsSnapshot
-	hasSnapshot      bool
-	lastReading      *SensorReading
-	lastEventTrigger time.Time
+	mu                 sync.RWMutex
+	snapshot           InsightsSnapshot
+	hasSnapshot        bool
+	lastReading        *SensorReading
+	lastEventTrigger   time.Time
 	lastEventDirection string
-	running          bool
-	pending          bool
+	running            bool
+	pending            bool
 }
 
 func NewInsightsScheduler(
@@ -95,6 +107,24 @@ func NewInsightsScheduler(
 	}
 	if cfg.PM10DeltaTrigger <= 0 {
 		cfg.PM10DeltaTrigger = defaults.PM10DeltaTrigger
+	}
+	if cfg.HumidityLowThreshold <= 0 {
+		cfg.HumidityLowThreshold = defaults.HumidityLowThreshold
+	}
+	if cfg.HumidityHighThreshold <= cfg.HumidityLowThreshold {
+		cfg.HumidityHighThreshold = defaults.HumidityHighThreshold
+	}
+	if cfg.HumidityDeltaTrigger <= 0 {
+		cfg.HumidityDeltaTrigger = defaults.HumidityDeltaTrigger
+	}
+	if cfg.TemperatureLowThreshold <= 0 {
+		cfg.TemperatureLowThreshold = defaults.TemperatureLowThreshold
+	}
+	if cfg.TemperatureHighThreshold <= cfg.TemperatureLowThreshold {
+		cfg.TemperatureHighThreshold = defaults.TemperatureHighThreshold
+	}
+	if cfg.TemperatureDeltaTrigger <= 0 {
+		cfg.TemperatureDeltaTrigger = defaults.TemperatureDeltaTrigger
 	}
 	if cfg.AnalyzeTimeout <= 0 {
 		cfg.AnalyzeTimeout = defaults.AnalyzeTimeout
@@ -211,26 +241,41 @@ func (scheduler *InsightsScheduler) shouldTriggerFromReading(reading SensorReadi
 	latest := reading
 	scheduler.lastReading = &latest
 
-	pm2CrossedHigh := previous.PM2 < scheduler.config.PM2Threshold &&
-		reading.PM2 >= scheduler.config.PM2Threshold
-	pm2CrossedLow := previous.PM2 >= scheduler.config.PM2Threshold &&
-		reading.PM2 < scheduler.config.PM2Threshold
-	pm10CrossedHigh := previous.PM10 < scheduler.config.PM10Threshold &&
-		reading.PM10 >= scheduler.config.PM10Threshold
-	pm10CrossedLow := previous.PM10 >= scheduler.config.PM10Threshold &&
-		reading.PM10 < scheduler.config.PM10Threshold
-
 	pm2Delta := reading.PM2 - previous.PM2
 	pm10Delta := reading.PM10 - previous.PM10
+	pm2SeverityChange := severityChange(
+		pmSeverity(previous.PM2, scheduler.config.PM2Threshold, criticalPM2Threshold),
+		pmSeverity(reading.PM2, scheduler.config.PM2Threshold, criticalPM2Threshold),
+	)
+	pm10SeverityChange := severityChange(
+		pmSeverity(previous.PM10, scheduler.config.PM10Threshold, criticalPM10Threshold),
+		pmSeverity(reading.PM10, scheduler.config.PM10Threshold, criticalPM10Threshold),
+	)
+	humiditySeverityChange := severityChange(
+		humiditySeverity(previous.Humidity, scheduler.config.HumidityLowThreshold, scheduler.config.HumidityHighThreshold),
+		humiditySeverity(reading.Humidity, scheduler.config.HumidityLowThreshold, scheduler.config.HumidityHighThreshold),
+	)
+	temperatureSeverityChange := severityChange(
+		temperatureSeverity(previous.Temperature, scheduler.config.TemperatureLowThreshold, scheduler.config.TemperatureHighThreshold),
+		temperatureSeverity(reading.Temperature, scheduler.config.TemperatureLowThreshold, scheduler.config.TemperatureHighThreshold),
+	)
 
-	worsening := pm2CrossedHigh ||
-		pm10CrossedHigh ||
+	worsening := pm2SeverityChange > 0 ||
+		pm10SeverityChange > 0 ||
+		humiditySeverityChange > 0 ||
+		temperatureSeverityChange > 0 ||
 		pm2Delta >= scheduler.config.PM2DeltaTrigger ||
-		pm10Delta >= scheduler.config.PM10DeltaTrigger
-	improving := pm2CrossedLow ||
-		pm10CrossedLow ||
+		pm10Delta >= scheduler.config.PM10DeltaTrigger ||
+		movedFurtherFromComfort(previous.Humidity, reading.Humidity, scheduler.config.HumidityLowThreshold, scheduler.config.HumidityHighThreshold, scheduler.config.HumidityDeltaTrigger) ||
+		movedFurtherFromComfort(previous.Temperature, reading.Temperature, scheduler.config.TemperatureLowThreshold, scheduler.config.TemperatureHighThreshold, scheduler.config.TemperatureDeltaTrigger)
+	improving := pm2SeverityChange < 0 ||
+		pm10SeverityChange < 0 ||
+		humiditySeverityChange < 0 ||
+		temperatureSeverityChange < 0 ||
 		pm2Delta <= -scheduler.config.PM2DeltaTrigger ||
-		pm10Delta <= -scheduler.config.PM10DeltaTrigger
+		pm10Delta <= -scheduler.config.PM10DeltaTrigger ||
+		movedTowardComfort(previous.Humidity, reading.Humidity, scheduler.config.HumidityLowThreshold, scheduler.config.HumidityHighThreshold, scheduler.config.HumidityDeltaTrigger) ||
+		movedTowardComfort(previous.Temperature, reading.Temperature, scheduler.config.TemperatureLowThreshold, scheduler.config.TemperatureHighThreshold, scheduler.config.TemperatureDeltaTrigger)
 
 	if !(worsening || improving) {
 		return false
@@ -253,6 +298,67 @@ func (scheduler *InsightsScheduler) shouldTriggerFromReading(reading SensorReadi
 	scheduler.lastEventTrigger = now
 	scheduler.lastEventDirection = eventDirection
 	return true
+}
+
+type metricSeverity int
+
+const (
+	metricOK metricSeverity = iota
+	metricWarn
+	metricCritical
+)
+
+func severityChange(previous, current metricSeverity) int {
+	return int(current) - int(previous)
+}
+
+func pmSeverity(value, warnThreshold, criticalThreshold float64) metricSeverity {
+	if value > criticalThreshold {
+		return metricCritical
+	}
+	if value >= warnThreshold {
+		return metricWarn
+	}
+	return metricOK
+}
+
+func humiditySeverity(value, lowThreshold, highThreshold float64) metricSeverity {
+	if value < criticalHumidityLowThreshold || value >= criticalHumidityHighThreshold {
+		return metricCritical
+	}
+	if value < lowThreshold || value >= highThreshold {
+		return metricWarn
+	}
+	return metricOK
+}
+
+func temperatureSeverity(value, lowThreshold, highThreshold float64) metricSeverity {
+	if value <= criticalTemperatureLowThreshold || value >= criticalTemperatureHighThreshold {
+		return metricCritical
+	}
+	if value <= lowThreshold || value >= highThreshold {
+		return metricWarn
+	}
+	return metricOK
+}
+
+func movedFurtherFromComfort(previous, current, low, high, trigger float64) bool {
+	return comfortDistance(current, low, high) >= comfortDistance(previous, low, high)+trigger
+}
+
+func movedTowardComfort(previous, current, low, high, trigger float64) bool {
+	previousDistance := comfortDistance(previous, low, high)
+	return previousDistance > 0 && comfortDistance(current, low, high) <= previousDistance-trigger
+}
+
+func comfortDistance(value, low, high float64) float64 {
+	if value < low {
+		return low - value
+	}
+	if value >= high {
+		return value - high
+	}
+	return 0
 }
 
 func (scheduler *InsightsScheduler) requestRecompute(trigger string) {
