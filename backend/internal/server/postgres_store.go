@@ -326,11 +326,27 @@ func (store *PostgresStore) Range(
 	    )
 	  ) AS device_id
 	),
+	eligible_readings AS (
+	  SELECT
+	    readings.*,
+	    COALESCE(NULLIF($4, ''), selected_device.device_id, readings.device_id) AS output_device_id
+	  FROM sensor_readings AS readings
+	  CROSS JOIN selected_device
+	  WHERE selected_device.device_id IS NOT NULL
+	    AND readings.timestamp >= $1 AND readings.timestamp <= $2
+	    AND (
+	      (NULLIF($4, '') IS NOT NULL AND readings.device_id = NULLIF($4, ''))
+	      OR (
+	        NULLIF($4, '') IS NULL
+	        AND readings.device_id IN (selected_device.device_id, 'default')
+	      )
+	    )
+	),
 	bucketed AS (
 	  SELECT
-	    ((readings.timestamp - $1) / $3) AS bucket,
-	    readings.device_id,
-	    MIN(readings.timestamp) AS timestamp,
+	    ((timestamp - $1) / $3) AS bucket,
+	    output_device_id AS device_id,
+	    MIN(timestamp) AS timestamp,
 	    AVG(temperature) AS temperature,
 	    AVG(pressure) AS pressure,
 	    AVG(humidity) AS humidity,
@@ -343,11 +359,8 @@ func (store *PostgresStore) Range(
 	    MAX(pm1) AS pm1_max,
 	    MAX(pm2) AS pm2_max,
 	    MAX(pm10) AS pm10_max
-	  FROM sensor_readings AS readings
-	  JOIN selected_device ON selected_device.device_id = readings.device_id
-	  WHERE selected_device.device_id IS NOT NULL
-	    AND readings.timestamp >= $1 AND readings.timestamp <= $2
-	  GROUP BY readings.device_id, ((readings.timestamp - $1) / $3)
+	  FROM eligible_readings
+	  GROUP BY output_device_id, ((timestamp - $1) / $3)
 	)
 	SELECT device_id, timestamp, temperature, pressure, humidity, oxidised, reduced, nh3, pm1, pm2, pm10, pm1_max, pm2_max, pm10_max
 	FROM bucketed

@@ -117,6 +117,7 @@ up for the configured interval after a durable database access.
 - `GET /api/readings?source=live` reads from the in-memory live buffer without touching Postgres.
 - `GET /api/ops/events?source=live` reads from the in-memory ops buffer without touching Postgres.
 - `GET /api/readings` reads persisted history from Postgres.
+- Unfiltered range queries merge legacy `default` rows with the latest device id for continuity after device id rollout.
 - If Postgres is unavailable at boot, the API starts in live-only mode and retries the database in the background.
 - Durable writes are idempotent by `(device_id, timestamp)`; legacy readings without `device_id` use `default`.
 - The `0004` migration creates the unique device/timestamp index concurrently so deploys avoid holding a long schema transaction.
