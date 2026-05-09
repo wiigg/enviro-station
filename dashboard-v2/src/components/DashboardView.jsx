@@ -388,9 +388,17 @@ export default function DashboardView({
     <div className="shell">
       <main className="layout">
         <header className="topbar reveal">
-          <div className="titleBlock">
-            <p className="eyebrow">Enviro Station</p>
-            <h1>Air quality dashboard</h1>
+          <div className="brandLockup">
+            <img
+              className="brandMark"
+              src="/enviro-station-logo.svg"
+              alt=""
+              aria-hidden="true"
+            />
+            <div className="titleBlock">
+              <p className="eyebrow">Enviro Station</p>
+              <h1>Air quality dashboard</h1>
+            </div>
           </div>
           <div className="topbarMeta">
             <StatusChip connectionStatus={connectionStatus} />

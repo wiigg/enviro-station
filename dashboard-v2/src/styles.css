@@ -81,9 +81,26 @@ select {
   padding: 4px 2px 2px;
 }
 
-.titleBlock {
-  flex: 1 1 420px;
+.brandLockup {
+  display: flex;
+  flex: 1 1 520px;
   min-width: 0;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.brandMark {
+  width: clamp(50px, 5vw, 64px);
+  height: clamp(50px, 5vw, 64px);
+  flex: 0 0 auto;
+  border-radius: 16px;
+  box-shadow: 0 14px 32px rgba(18, 24, 32, 0.18);
+}
+
+.titleBlock {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-top: 2px;
 }
 
 .eyebrow {
@@ -97,7 +114,7 @@ select {
 
 .topbar h1 {
   margin: 0;
-  font-size: clamp(2rem, 4.4vw, 3.5rem);
+  font-size: clamp(2rem, 4.2vw, 3.35rem);
   line-height: 0.98;
   letter-spacing: 0;
 }
@@ -108,6 +125,7 @@ select {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+  max-width: 100%;
 }
 
 .chip {
@@ -531,6 +549,16 @@ select {
   }
 }
 
+@media (max-width: 1180px) {
+  .brandLockup {
+    flex-basis: 100%;
+  }
+
+  .topbarMeta {
+    justify-content: flex-start;
+  }
+}
+
 @media (max-width: 1100px) {
   .kpiGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -564,9 +592,23 @@ select {
     gap: 10px;
   }
 
+  .brandLockup {
+    flex: 1 1 auto;
+    width: 100%;
+    align-items: center;
+    gap: 11px;
+  }
+
+  .brandMark {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+  }
+
   .titleBlock {
     flex: 0 1 auto;
     width: 100%;
+    padding-top: 0;
   }
 
   .topbarMeta {
@@ -574,6 +616,9 @@ select {
   }
 
   .overviewWarning {
+    flex: 0 1 auto;
+    width: 100%;
+    max-width: none;
     text-align: left;
   }
 
