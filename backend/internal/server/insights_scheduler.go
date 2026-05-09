@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"errors"
 	"log"
+	"sort"
 	"sync"
 	"time"
 )
@@ -25,6 +27,21 @@ type InsightsEngine interface {
 type InsightsSnapshotStore interface {
 	SaveInsightsSnapshot(ctx context.Context, snapshot InsightsSnapshot) error
 	LatestInsightsSnapshot(ctx context.Context) (InsightsSnapshot, bool, error)
+}
+
+type insightsAnalysisSource string
+
+const (
+	insightsAnalysisSourceDurable insightsAnalysisSource = "durable"
+	insightsAnalysisSourceLive    insightsAnalysisSource = "live"
+)
+
+type InsightsSchedulerOption func(*InsightsScheduler)
+
+func WithInsightsLiveReadings(source func(limit int) []SensorReading) InsightsSchedulerOption {
+	return func(scheduler *InsightsScheduler) {
+		scheduler.liveReadings = source
+	}
 }
 
 type InsightsSchedulerConfig struct {
@@ -68,6 +85,7 @@ type InsightsScheduler struct {
 	snapshotStore InsightsSnapshotStore
 	analyzer      AlertAnalyzer
 	config        InsightsSchedulerConfig
+	liveReadings  func(limit int) []SensorReading
 
 	mu                 sync.RWMutex
 	snapshot           InsightsSnapshot
@@ -83,6 +101,7 @@ func NewInsightsScheduler(
 	store Store,
 	analyzer AlertAnalyzer,
 	config InsightsSchedulerConfig,
+	options ...InsightsSchedulerOption,
 ) *InsightsScheduler {
 	cfg := config
 	defaults := DefaultInsightsSchedulerConfig()
@@ -130,7 +149,7 @@ func NewInsightsScheduler(
 		cfg.AnalyzeTimeout = defaults.AnalyzeTimeout
 	}
 
-	return &InsightsScheduler{
+	scheduler := &InsightsScheduler{
 		store:    store,
 		analyzer: analyzer,
 		config:   cfg,
@@ -141,6 +160,10 @@ func NewInsightsScheduler(
 			return nil
 		}(),
 	}
+	for _, option := range options {
+		option(scheduler)
+	}
+	return scheduler
 }
 
 func (scheduler *InsightsScheduler) Start(ctx context.Context) {
@@ -396,7 +419,7 @@ func (scheduler *InsightsScheduler) recompute(trigger string) {
 	ctx, cancel := context.WithTimeout(context.Background(), scheduler.config.AnalyzeTimeout)
 	defer cancel()
 
-	readings, err := scheduler.store.Latest(ctx, scheduler.config.AnalysisLimit)
+	readings, analysisSource, err := scheduler.analysisReadings(ctx, trigger)
 	if err != nil {
 		log.Printf("insights recompute failed to load readings: %v", err)
 		return
@@ -422,7 +445,7 @@ func (scheduler *InsightsScheduler) recompute(trigger string) {
 	scheduler.hasSnapshot = true
 	scheduler.mu.Unlock()
 
-	if scheduler.snapshotStore != nil {
+	if scheduler.snapshotStore != nil && analysisSource != insightsAnalysisSourceLive {
 		saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := scheduler.snapshotStore.SaveInsightsSnapshot(saveCtx, snapshot); err != nil {
 			log.Printf("insights snapshot persist failed: %v", err)
@@ -431,9 +454,69 @@ func (scheduler *InsightsScheduler) recompute(trigger string) {
 	}
 
 	log.Printf(
-		"insights recomputed trigger=%s samples=%d insights=%d",
+		"insights recomputed trigger=%s analysis_source=%s samples=%d insights=%d",
 		trigger,
+		analysisSource,
 		len(readings),
 		len(alerts),
 	)
+}
+
+func (scheduler *InsightsScheduler) analysisReadings(
+	ctx context.Context,
+	trigger string,
+) ([]SensorReading, insightsAnalysisSource, error) {
+	liveReadings := []SensorReading(nil)
+	if scheduler.liveReadings != nil {
+		liveReadings = trimLatestReadings(
+			scheduler.liveReadings(scheduler.config.AnalysisLimit),
+			scheduler.config.AnalysisLimit,
+		)
+	}
+	if trigger == "event" && len(liveReadings) > 0 {
+		return liveReadings, insightsAnalysisSourceLive, nil
+	}
+
+	durableReadings, durableErr := scheduler.store.Latest(ctx, scheduler.config.AnalysisLimit)
+	if len(liveReadings) > 0 {
+		if len(durableReadings) == 0 || latestTimestamp(liveReadings) > latestTimestamp(durableReadings) {
+			return liveReadings, insightsAnalysisSourceLive, nil
+		}
+	}
+
+	if durableErr != nil {
+		if len(liveReadings) > 0 && errors.Is(durableErr, ErrStoreUnavailable) {
+			return liveReadings, insightsAnalysisSourceLive, nil
+		}
+		return nil, insightsAnalysisSourceDurable, durableErr
+	}
+
+	return trimLatestReadings(durableReadings, scheduler.config.AnalysisLimit), insightsAnalysisSourceDurable, nil
+}
+
+func latestTimestamp(readings []SensorReading) int64 {
+	if len(readings) == 0 {
+		return 0
+	}
+	return readings[len(readings)-1].Timestamp
+}
+
+func trimLatestReadings(readings []SensorReading, limit int) []SensorReading {
+	if len(readings) == 0 {
+		return []SensorReading{}
+	}
+
+	output := make([]SensorReading, len(readings))
+	copy(output, readings)
+	sort.SliceStable(output, func(left, right int) bool {
+		if output[left].Timestamp == output[right].Timestamp {
+			return output[left].DeviceID < output[right].DeviceID
+		}
+		return output[left].Timestamp < output[right].Timestamp
+	})
+
+	if limit > 0 && len(output) > limit {
+		output = output[len(output)-limit:]
+	}
+	return output
 }

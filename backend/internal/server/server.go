@@ -125,7 +125,12 @@ func NewAPI(store Store, ingestAPIKey string, options ...APIOption) *API {
 	api.live = newLiveBuffer(api.liveBufferLimit)
 
 	if api.insightsEngine == nil && api.alertAnalyzer != nil {
-		scheduler := NewInsightsScheduler(store, api.alertAnalyzer, api.insightsSchedulerConfig)
+		scheduler := NewInsightsScheduler(
+			store,
+			api.alertAnalyzer,
+			api.insightsSchedulerConfig,
+			WithInsightsLiveReadings(api.live.latest),
+		)
 		scheduler.Start(context.Background())
 		api.insightsEngine = scheduler
 	}
@@ -351,6 +356,9 @@ func (api *API) handleLive(response http.ResponseWriter, request *http.Request) 
 
 	api.onTelemetryReceived(time.Now())
 	api.publishLive(reading)
+	if api.insightsEngine != nil {
+		api.insightsEngine.OnReading(reading)
+	}
 	log.Printf(
 		"reading accepted path=%s persisted=false timestamp=%d remote=%s",
 		request.URL.Path,

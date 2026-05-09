@@ -22,6 +22,7 @@ type fakeStore struct {
 	pingErr     error
 	addErr      error
 	addBatchErr error
+	latestCalls int
 	rangeFrom   int64
 	rangeTo     int64
 	rangeDevice string
@@ -45,6 +46,7 @@ func (store *fakeStore) AddBatch(_ context.Context, readings []SensorReading) er
 }
 
 func (store *fakeStore) Latest(_ context.Context, limit int) ([]SensorReading, error) {
+	store.latestCalls++
 	if store.latestErr != nil {
 		return nil, store.latestErr
 	}
@@ -93,14 +95,16 @@ func (store *fakeStore) Ping(_ context.Context) error {
 func (store *fakeStore) Close() {}
 
 type fakeAlertAnalyzer struct {
-	alerts []Alert
-	err    error
-	source string
-	calls  int
+	alerts       []Alert
+	err          error
+	source       string
+	calls        int
+	lastReadings []SensorReading
 }
 
-func (analyzer *fakeAlertAnalyzer) Analyze(_ context.Context, _ []SensorReading) ([]Alert, error) {
+func (analyzer *fakeAlertAnalyzer) Analyze(_ context.Context, readings []SensorReading) ([]Alert, error) {
 	analyzer.calls++
+	analyzer.lastReadings = append([]SensorReading(nil), readings...)
 	if analyzer.err != nil {
 		return nil, analyzer.err
 	}
@@ -117,8 +121,10 @@ func (analyzer *fakeAlertAnalyzer) Source() string {
 }
 
 type fakeInsightsEngine struct {
-	snapshot InsightsSnapshot
-	ready    bool
+	snapshot     InsightsSnapshot
+	ready        bool
+	readingCalls int
+	batchCalls   int
 }
 
 func (engine *fakeInsightsEngine) Snapshot(limit int) (InsightsSnapshot, bool) {
@@ -133,9 +139,13 @@ func (engine *fakeInsightsEngine) Snapshot(limit int) (InsightsSnapshot, bool) {
 	return snapshot, true
 }
 
-func (engine *fakeInsightsEngine) OnReading(_ SensorReading) {}
+func (engine *fakeInsightsEngine) OnReading(_ SensorReading) {
+	engine.readingCalls++
+}
 
-func (engine *fakeInsightsEngine) OnBatch(_ []SensorReading) {}
+func (engine *fakeInsightsEngine) OnBatch(_ []SensorReading) {
+	engine.batchCalls++
+}
 
 type fakeOpsStore struct {
 	*fakeStore
@@ -398,6 +408,38 @@ func TestHandleLivePublishesWithoutPersisting(t *testing.T) {
 	}
 	if len(store.added) != 0 {
 		t.Fatalf("expected no persisted readings, got %d", len(store.added))
+	}
+}
+
+func TestHandleLiveUpdatesInsightsEngine(t *testing.T) {
+	store := &fakeStore{}
+	insights := &fakeInsightsEngine{}
+	api := NewAPI(store, "secret", WithInsightsEngine(insights))
+	handler := api.Handler()
+
+	request := httptest.NewRequest(http.MethodPost, "/api/live", bytes.NewBufferString(`{
+		"timestamp":"1738886400",
+		"temperature":"22.4",
+		"pressure":"101305",
+		"humidity":"40.1",
+		"oxidised":"1.2",
+		"reduced":"1.1",
+		"nh3":"0.7",
+		"pm1":"2",
+		"pm2":"3",
+		"pm10":"4"
+	}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-API-Key", "secret")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("expected status %d, got %d", http.StatusAccepted, response.Code)
+	}
+	if insights.readingCalls != 1 {
+		t.Fatalf("expected live reading to update insights engine once, got %d", insights.readingCalls)
 	}
 }
 

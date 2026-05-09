@@ -205,3 +205,76 @@ func TestShouldTriggerFromReadingPMCriticalBoundary(t *testing.T) {
 		t.Fatalf("expected warn-to-critical PM2 change to trigger recompute")
 	}
 }
+
+func TestRecomputePrefersNewerLiveReadings(t *testing.T) {
+	store := &fakeStore{
+		latest: []SensorReading{
+			{
+				Timestamp:   1738886400,
+				Temperature: 30.8,
+				Humidity:    23,
+				PM2:         4,
+				PM10:        7,
+			},
+		},
+	}
+	analyzer := &fakeAlertAnalyzer{}
+	scheduler := NewInsightsScheduler(
+		store,
+		analyzer,
+		testInsightsSchedulerConfig(),
+		WithInsightsLiveReadings(func(_ int) []SensorReading {
+			return []SensorReading{
+				{
+					Timestamp:   1738886460,
+					Temperature: 22.1,
+					Humidity:    30,
+					PM2:         4,
+					PM10:        7,
+				},
+			}
+		}),
+	)
+
+	scheduler.recompute("test")
+
+	if analyzer.calls != 1 {
+		t.Fatalf("expected one analysis call, got %d", analyzer.calls)
+	}
+	if len(analyzer.lastReadings) != 1 {
+		t.Fatalf("expected one live reading for analysis, got %d", len(analyzer.lastReadings))
+	}
+	if got := analyzer.lastReadings[0].Temperature; got != 22.1 {
+		t.Fatalf("expected live temperature to drive insights, got %.1f", got)
+	}
+}
+
+func TestEventRecomputeUsesLiveReadingsWithoutDurableRead(t *testing.T) {
+	store := &fakeStore{}
+	analyzer := &fakeAlertAnalyzer{}
+	scheduler := NewInsightsScheduler(
+		store,
+		analyzer,
+		testInsightsSchedulerConfig(),
+		WithInsightsLiveReadings(func(_ int) []SensorReading {
+			return []SensorReading{
+				{
+					Timestamp:   1738886460,
+					Temperature: 22.1,
+					Humidity:    30,
+					PM2:         4,
+					PM10:        7,
+				},
+			}
+		}),
+	)
+
+	scheduler.recompute("event")
+
+	if store.latestCalls != 0 {
+		t.Fatalf("expected live event recompute to avoid durable reads, got %d", store.latestCalls)
+	}
+	if analyzer.calls != 1 {
+		t.Fatalf("expected one analysis call, got %d", analyzer.calls)
+	}
+}

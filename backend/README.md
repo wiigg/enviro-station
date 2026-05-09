@@ -126,8 +126,11 @@ up for the configured interval after a durable database access.
 Insights are precomputed in the backend, not generated per request.
 - Scheduled recompute at `OPENAI_INSIGHTS_REFRESH_INTERVAL`
 - Event-triggered recompute on significant threshold crossings or material changes
+- Live readings trigger recompute checks and are used for analysis when newer than durable history
+- Live-triggered recomputes avoid durable reads so realtime dashboards do not wake Neon for AI copy alone
 - `/api/insights` returns the latest stored snapshot
-- Latest snapshot is persisted in Postgres and restored on backend restart
+- Durable-analysis snapshots are persisted in Postgres and restored on backend restart
+- Live-only event snapshots stay in memory until the next durable recompute
 
 ## Docker Compose (backend + postgres)
 
