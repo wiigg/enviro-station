@@ -16,6 +16,7 @@ const TOOLTIP_CONTENT_STYLE = {
   background: "rgba(255,255,255,0.98)",
   boxShadow: "0 12px 30px rgba(19, 28, 43, 0.12)"
 };
+const PARTICULATE_TICK_INTERVALS = 5;
 
 const TREND_PANELS = [
   {
@@ -27,7 +28,8 @@ const TREND_PANELS = [
     averageDataKey: "pm2Average",
     averageStroke: "#4f6278",
     tooltipName: "PM2.5",
-    tooltipUnit: "ug/m3"
+    tooltipUnit: "ug/m3",
+    useParticulateYAxis: true
   },
   {
     title: "Comfort Trend",
@@ -145,6 +147,43 @@ function insightKindLabel(kind) {
   return "Insight";
 }
 
+function particulateAxisTicks(chartData, keys) {
+  let max = 0;
+  for (const point of chartData) {
+    for (const key of keys) {
+      const value = point[key];
+      if (Number.isFinite(value) && value > max) {
+        max = value;
+      }
+    }
+  }
+
+  const paddedMax = Math.max(max * 1.15, 10);
+  const step = niceAxisStep(paddedMax / PARTICULATE_TICK_INTERVALS);
+  return Array.from(
+    { length: PARTICULATE_TICK_INTERVALS + 1 },
+    (_item, index) => step * index
+  );
+}
+
+function niceAxisStep(value) {
+  const magnitude = 10 ** Math.floor(Math.log10(value));
+  const fraction = value / magnitude;
+  if (fraction <= 1) {
+    return magnitude;
+  }
+  if (fraction <= 2) {
+    return 2 * magnitude;
+  }
+  if (fraction <= 2.5) {
+    return 2.5 * magnitude;
+  }
+  if (fraction <= 5) {
+    return 5 * magnitude;
+  }
+  return 10 * magnitude;
+}
+
 const StatusChip = memo(function StatusChip({ connectionStatus }) {
   return (
     <span className={`chip chipStatus ${statusClassName(connectionStatus)}`}>
@@ -207,6 +246,7 @@ const TrendPanel = memo(function TrendPanel({
   chartData,
   axisTickFormatter,
   yAxisDomain,
+  useParticulateYAxis = false,
   lineDataKey,
   lineStroke,
   averageDataKey,
@@ -214,6 +254,13 @@ const TrendPanel = memo(function TrendPanel({
   tooltipName,
   tooltipUnit
 }) {
+  const yAxisTicks = useParticulateYAxis
+    ? particulateAxisTicks(chartData, [lineDataKey, averageDataKey])
+    : undefined;
+  const resolvedYAxisDomain = yAxisTicks
+    ? [0, yAxisTicks[yAxisTicks.length - 1]]
+    : yAxisDomain;
+
   return (
     <article className="card panel">
       <div className="panelHead">
@@ -246,7 +293,9 @@ const TrendPanel = memo(function TrendPanel({
                 tickLine={false}
               />
               <YAxis
-                domain={yAxisDomain}
+                allowDataOverflow={useParticulateYAxis}
+                domain={resolvedYAxisDomain}
+                ticks={yAxisTicks}
                 width={44}
                 tick={AXIS_TICK_STYLE}
                 axisLine={false}
@@ -432,7 +481,8 @@ export default function DashboardView({
                 ariaLabel={panel.ariaLabel}
                 chartData={chartData}
                 axisTickFormatter={axisTickFormatter}
-                yAxisDomain={panel.useTemperatureDomain ? temperatureDomain : undefined}
+                yAxisDomain={panel.useTemperatureDomain ? temperatureDomain : panel.yAxisDomain}
+                useParticulateYAxis={panel.useParticulateYAxis}
                 lineDataKey={panel.lineDataKey}
                 lineStroke={panel.lineStroke}
                 averageDataKey={panel.averageDataKey}
