@@ -5,22 +5,30 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 )
 
+const defaultDeviceID = "default"
+
 type SensorReading struct {
-	Timestamp   int64   `json:"timestamp"`
-	Temperature float64 `json:"temperature"`
-	Pressure    float64 `json:"pressure"`
-	Humidity    float64 `json:"humidity"`
-	Oxidised    float64 `json:"oxidised"`
-	Reduced     float64 `json:"reduced"`
-	Nh3         float64 `json:"nh3"`
-	PM1         float64 `json:"pm1"`
-	PM2         float64 `json:"pm2"`
-	PM10        float64 `json:"pm10"`
+	DeviceID    string   `json:"device_id"`
+	Timestamp   int64    `json:"timestamp"`
+	Temperature float64  `json:"temperature"`
+	Pressure    float64  `json:"pressure"`
+	Humidity    float64  `json:"humidity"`
+	Oxidised    float64  `json:"oxidised"`
+	Reduced     float64  `json:"reduced"`
+	Nh3         float64  `json:"nh3"`
+	PM1         float64  `json:"pm1"`
+	PM2         float64  `json:"pm2"`
+	PM10        float64  `json:"pm10"`
+	PM1Max      *float64 `json:"pm1_max,omitempty"`
+	PM2Max      *float64 `json:"pm2_max,omitempty"`
+	PM10Max     *float64 `json:"pm10_max,omitempty"`
 }
 
 var allowedReadingKeys = map[string]struct{}{
+	"device_id":   {},
 	"timestamp":   {},
 	"temperature": {},
 	"pressure":    {},
@@ -62,11 +70,19 @@ func DecodeReadingsBatch(raw []byte, maxBatchSize int) ([]SensorReading, error) 
 	}
 
 	readings := make([]SensorReading, 0, len(payloads))
+	readingIndexes := make(map[string]int, len(payloads))
 	for index, payload := range payloads {
 		reading, err := decodeReadingPayload(payload)
 		if err != nil {
 			return nil, fmt.Errorf("invalid reading at index %d: %w", index, err)
 		}
+
+		key := readingBatchKey(reading)
+		if existingIndex, ok := readingIndexes[key]; ok {
+			readings[existingIndex] = reading
+			continue
+		}
+		readingIndexes[key] = len(readings)
 		readings = append(readings, reading)
 	}
 
@@ -78,6 +94,11 @@ func decodeReadingPayload(payload map[string]any) (SensorReading, error) {
 		if _, allowed := allowedReadingKeys[key]; !allowed {
 			return SensorReading{}, fmt.Errorf("unknown field: %s", key)
 		}
+	}
+
+	deviceID, err := parseDeviceID(payload)
+	if err != nil {
+		return SensorReading{}, err
 	}
 
 	timestamp, err := parseInt64Field(payload, "timestamp")
@@ -126,6 +147,7 @@ func decodeReadingPayload(payload map[string]any) (SensorReading, error) {
 	}
 
 	return SensorReading{
+		DeviceID:    deviceID,
 		Timestamp:   timestamp,
 		Temperature: temperature,
 		Pressure:    pressure,
@@ -137,6 +159,31 @@ func decodeReadingPayload(payload map[string]any) (SensorReading, error) {
 		PM2:         pm2,
 		PM10:        pm10,
 	}, nil
+}
+
+func parseDeviceID(payload map[string]any) (string, error) {
+	value, ok := payload["device_id"]
+	if !ok {
+		return defaultDeviceID, nil
+	}
+
+	deviceID, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("invalid field device_id: unsupported string type %T", value)
+	}
+
+	deviceID = strings.TrimSpace(deviceID)
+	if deviceID == "" {
+		return "", fmt.Errorf("device_id must not be empty")
+	}
+	if len(deviceID) > 128 {
+		return "", fmt.Errorf("device_id must be 128 characters or fewer")
+	}
+	return deviceID, nil
+}
+
+func readingBatchKey(reading SensorReading) string {
+	return reading.DeviceID + "\x00" + strconv.FormatInt(reading.Timestamp, 10)
 }
 
 func parseFloatField(payload map[string]any, key string) (float64, error) {

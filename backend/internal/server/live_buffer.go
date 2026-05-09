@@ -48,3 +48,28 @@ func (buffer *liveBuffer) latest(limit int) []SensorReading {
 	copy(output, buffer.readings[start:])
 	return output
 }
+
+func (buffer *liveBuffer) latestForDevice(limit int, deviceID string) []SensorReading {
+	if deviceID == "" {
+		return buffer.latest(limit)
+	}
+
+	buffer.mu.RLock()
+	defer buffer.mu.RUnlock()
+
+	if limit <= 0 {
+		limit = len(buffer.readings)
+	}
+
+	output := make([]SensorReading, 0, limit)
+	for index := len(buffer.readings) - 1; index >= 0 && len(output) < limit; index-- {
+		if buffer.readings[index].DeviceID == deviceID {
+			output = append(output, buffer.readings[index])
+		}
+	}
+
+	for left, right := 0, len(output)-1; left < right; left, right = left+1, right-1 {
+		output[left], output[right] = output[right], output[left]
+	}
+	return output
+}

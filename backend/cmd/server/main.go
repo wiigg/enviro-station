@@ -36,12 +36,29 @@ func main() {
 		})
 	}
 
-	if postgresStore, err := connectPostgresStore(databaseURL, pgMaxConns); err != nil {
-		log.Printf("postgres unavailable; starting in live-only mode: %v", err)
-		startPostgresReconnectLoop(store, databaseURL, pgMaxConns, startRetentionWorkerOnce)
-	} else {
-		store.Set(postgresStore)
+	connectStore := func(ctx context.Context) (server.Store, error) {
+		postgresStore, err := connectPostgresStore(ctx, databaseURL, pgMaxConns)
+		if err != nil {
+			return nil, err
+		}
 		startRetentionWorkerOnce(postgresStore)
+		return postgresStore, nil
+	}
+
+	if databaseURL != "" {
+		store.SetConnector(connectStore)
+	}
+
+	if boolOrDefault("DATABASE_CONNECT_ON_START", true) {
+		if postgresStore, err := connectPostgresStore(context.Background(), databaseURL, pgMaxConns); err != nil {
+			log.Printf("postgres unavailable; starting in live-only mode: %v", err)
+			startPostgresReconnectLoop(store, databaseURL, pgMaxConns, startRetentionWorkerOnce)
+		} else {
+			store.Set(postgresStore)
+			startRetentionWorkerOnce(postgresStore)
+		}
+	} else if databaseURL != "" {
+		log.Printf("postgres connection deferred until durable store access")
 	}
 
 	options := make([]server.APIOption, 0, 1)
@@ -51,6 +68,12 @@ func main() {
 	}))
 	options = append(options, server.WithTrustProxyIP(boolOrDefault("TRUST_PROXY_HEADERS", false)))
 	options = append(options, server.WithLiveBufferLimit(intOrDefault("LIVE_BUFFER_LIMIT", 3600)))
+	options = append(options, server.WithReadAPIKey(os.Getenv("READ_API_KEY")))
+
+	readRateLimit := server.DefaultReadRateLimitConfig()
+	readRateLimit.Requests = intOrDefault("READ_RATE_LIMIT_REQUESTS", readRateLimit.Requests)
+	readRateLimit.Window = durationOrDefault("READ_RATE_LIMIT_WINDOW", readRateLimit.Window)
+	options = append(options, server.WithReadRateLimit(readRateLimit))
 
 	openAIAPIKey := strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
 	if openAIAPIKey != "" {
@@ -137,12 +160,12 @@ func main() {
 	}
 }
 
-func connectPostgresStore(databaseURL string, maxConns int32) (*server.PostgresStore, error) {
+func connectPostgresStore(parentCtx context.Context, databaseURL string, maxConns int32) (*server.PostgresStore, error) {
 	if strings.TrimSpace(databaseURL) == "" {
 		return nil, server.ErrStoreUnavailable
 	}
 
-	setupCtx, cancelSetup := context.WithTimeout(context.Background(), 10*time.Second)
+	setupCtx, cancelSetup := context.WithTimeout(parentCtx, 10*time.Second)
 	defer cancelSetup()
 
 	return server.NewPostgresStore(setupCtx, databaseURL, maxConns)
@@ -168,7 +191,7 @@ func startPostgresReconnectLoop(
 				return
 			}
 
-			postgresStore, err := connectPostgresStore(databaseURL, maxConns)
+			postgresStore, err := connectPostgresStore(context.Background(), databaseURL, maxConns)
 			if err != nil {
 				log.Printf("postgres reconnect failed: %v", err)
 				continue
@@ -195,7 +218,7 @@ func withCORS(allowedOrigin string, next http.Handler) http.Handler {
 		}
 
 		response.Header().Set("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
-		response.Header().Set("Access-Control-Allow-Headers", "Content-Type,X-API-Key")
+		response.Header().Set("Access-Control-Allow-Headers", "Content-Type,X-API-Key,X-Read-API-Key")
 
 		if request.Method == http.MethodOptions {
 			response.WriteHeader(http.StatusNoContent)
@@ -402,14 +425,17 @@ func startRetentionWorker(store *server.PostgresStore) {
 	}
 
 	log.Printf(
-		"retention cleanup enabled days=%d interval=%s batch_size=%d",
+		"retention cleanup enabled days=%d interval=%s batch_size=%d run_on_start=%t",
 		retentionDays,
 		interval.String(),
 		batchSize,
+		boolOrDefault("RETENTION_RUN_ON_START", true),
 	)
 
 	go func() {
-		cleanup()
+		if boolOrDefault("RETENTION_RUN_ON_START", true) {
+			cleanup()
+		}
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for range ticker.C {

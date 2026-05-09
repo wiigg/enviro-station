@@ -24,6 +24,7 @@ type fakeStore struct {
 	addBatchErr error
 	rangeFrom   int64
 	rangeTo     int64
+	rangeDevice string
 	rangePoints int
 }
 
@@ -57,13 +58,20 @@ func (store *fakeStore) Latest(_ context.Context, limit int) ([]SensorReading, e
 	return output, nil
 }
 
-func (store *fakeStore) Range(_ context.Context, fromTimestamp int64, toTimestamp int64, maxPoints int) ([]SensorReading, error) {
+func (store *fakeStore) Range(
+	_ context.Context,
+	fromTimestamp int64,
+	toTimestamp int64,
+	deviceID string,
+	maxPoints int,
+) ([]SensorReading, error) {
 	if store.rangeErr != nil {
 		return nil, store.rangeErr
 	}
 
 	store.rangeFrom = fromTimestamp
 	store.rangeTo = toTimestamp
+	store.rangeDevice = deviceID
 	store.rangePoints = maxPoints
 
 	if len(store.ranged) == 0 {
@@ -190,6 +198,49 @@ func TestHandleIngestRejectsUnauthorized(t *testing.T) {
 	}
 }
 
+func TestDecodeReadingSetsDefaultDeviceID(t *testing.T) {
+	reading, err := DecodeReading([]byte(`{
+		"timestamp":"1738886400",
+		"temperature":"22.4",
+		"pressure":"101305",
+		"humidity":"40.1",
+		"oxidised":"1.2",
+		"reduced":"1.1",
+		"nh3":"0.7",
+		"pm1":"2",
+		"pm2":"3",
+		"pm10":"4"
+	}`))
+	if err != nil {
+		t.Fatalf("decode reading: %v", err)
+	}
+	if reading.DeviceID != defaultDeviceID {
+		t.Fatalf("expected default device id %q, got %q", defaultDeviceID, reading.DeviceID)
+	}
+}
+
+func TestDecodeReadingAcceptsDeviceID(t *testing.T) {
+	reading, err := DecodeReading([]byte(`{
+		"device_id":"pi-abc",
+		"timestamp":"1738886400",
+		"temperature":"22.4",
+		"pressure":"101305",
+		"humidity":"40.1",
+		"oxidised":"1.2",
+		"reduced":"1.1",
+		"nh3":"0.7",
+		"pm1":"2",
+		"pm2":"3",
+		"pm10":"4"
+	}`))
+	if err != nil {
+		t.Fatalf("decode reading: %v", err)
+	}
+	if reading.DeviceID != "pi-abc" {
+		t.Fatalf("expected device id pi-abc, got %q", reading.DeviceID)
+	}
+}
+
 func TestHandleIngestAcceptsStringAndNumberPayloads(t *testing.T) {
 	store := &fakeStore{}
 	api := NewAPI(store, "secret")
@@ -250,6 +301,32 @@ func TestHandleIngestBatchAcceptsMultipleReadings(t *testing.T) {
 
 	if len(store.added) != 2 {
 		t.Fatalf("expected two stored readings, got %d", len(store.added))
+	}
+}
+
+func TestHandleIngestBatchDedupesDeviceTimestamp(t *testing.T) {
+	store := &fakeStore{}
+	api := NewAPI(store, "secret")
+	handler := api.Handler()
+
+	request := httptest.NewRequest(http.MethodPost, "/api/ingest/batch", bytes.NewBufferString(`[
+		{"device_id":"pi-1","timestamp":"1738886400","temperature":"22.4","pressure":"101305","humidity":"40.1","oxidised":"1.2","reduced":"1.1","nh3":"0.7","pm1":"2","pm2":"3","pm10":"4"},
+		{"device_id":"pi-1","timestamp":"1738886400","temperature":"22.5","pressure":"101300","humidity":"40.2","oxidised":"1.3","reduced":"1.0","nh3":"0.8","pm1":"3","pm2":"4","pm10":"5"}
+	]`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-API-Key", "secret")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("expected status %d, got %d", http.StatusAccepted, response.Code)
+	}
+	if len(store.added) != 1 {
+		t.Fatalf("expected one stored reading after dedupe, got %d", len(store.added))
+	}
+	if store.added[0].PM2 != 4 {
+		t.Fatalf("expected last duplicate to win with pm2=4, got %.1f", store.added[0].PM2)
 	}
 }
 
@@ -321,6 +398,33 @@ func TestHandleLivePublishesWithoutPersisting(t *testing.T) {
 	}
 	if len(store.added) != 0 {
 		t.Fatalf("expected no persisted readings, got %d", len(store.added))
+	}
+}
+
+func TestHandleLiveStatusReportsStreamSubscribers(t *testing.T) {
+	store := &fakeStore{}
+	api := NewAPI(store, "secret")
+	_, unsubscribe := api.stream.subscribe("")
+	defer unsubscribe()
+	handler := api.Handler()
+
+	request := httptest.NewRequest(http.MethodGet, "/api/live/status", nil)
+	request.Header.Set("X-API-Key", "secret")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, response.Code)
+	}
+
+	var payload struct {
+		SubscriberCount int `json:"subscriber_count"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if payload.SubscriberCount != 1 {
+		t.Fatalf("expected one subscriber, got %d", payload.SubscriberCount)
 	}
 }
 
@@ -462,6 +566,48 @@ func TestHandleReadyReturnsServiceUnavailableWhenStoreUnreachable(t *testing.T) 
 	}
 }
 
+func TestRuntimeStoreConnectsLazily(t *testing.T) {
+	runtimeStore := NewRuntimeStore(nil)
+	connectCalls := 0
+	durableStore := &fakeStore{}
+	runtimeStore.SetConnector(func(_ context.Context) (Store, error) {
+		connectCalls++
+		return durableStore, nil
+	})
+
+	if runtimeStore.HasStore() {
+		t.Fatalf("expected runtime store to start without durable store")
+	}
+
+	if err := runtimeStore.Add(context.Background(), SensorReading{Timestamp: 1738886400}); err != nil {
+		t.Fatalf("add via lazy store: %v", err)
+	}
+	if connectCalls != 1 {
+		t.Fatalf("expected one connect call, got %d", connectCalls)
+	}
+	if !runtimeStore.HasStore() {
+		t.Fatalf("expected runtime store to keep connected store")
+	}
+	if len(durableStore.added) != 1 {
+		t.Fatalf("expected one stored reading, got %d", len(durableStore.added))
+	}
+}
+
+func TestNewAPIDoesNotConnectLazyStoreAtStartup(t *testing.T) {
+	runtimeStore := NewRuntimeStore(nil)
+	connectCalls := 0
+	runtimeStore.SetConnector(func(_ context.Context) (Store, error) {
+		connectCalls++
+		return &fakeStore{}, nil
+	})
+
+	_ = NewAPI(runtimeStore, "secret")
+
+	if connectCalls != 0 {
+		t.Fatalf("expected no startup connect calls, got %d", connectCalls)
+	}
+}
+
 func TestHandleReadingsReturnsOKWithoutReadKey(t *testing.T) {
 	store := &fakeStore{}
 	api := NewAPI(store, "secret")
@@ -474,6 +620,69 @@ func TestHandleReadingsReturnsOKWithoutReadKey(t *testing.T) {
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, response.Code)
+	}
+}
+
+func TestHandleReadingsRequiresReadKeyWhenConfigured(t *testing.T) {
+	store := &fakeStore{}
+	api := NewAPI(store, "secret", WithReadAPIKey("read-secret"))
+	handler := api.Handler()
+
+	request := httptest.NewRequest(http.MethodGet, "/api/readings?limit=1", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, response.Code)
+	}
+
+	authorizedRequest := httptest.NewRequest(http.MethodGet, "/api/readings?limit=1", nil)
+	authorizedRequest.Header.Set("X-Read-API-Key", "read-secret")
+	authorizedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(authorizedResponse, authorizedRequest)
+
+	if authorizedResponse.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, authorizedResponse.Code)
+	}
+
+	queryRequest := httptest.NewRequest(http.MethodGet, "/api/readings?limit=1&read_key=read-secret", nil)
+	queryResponse := httptest.NewRecorder()
+	handler.ServeHTTP(queryResponse, queryRequest)
+
+	if queryResponse.Code != http.StatusOK {
+		t.Fatalf("expected query auth status %d, got %d", http.StatusOK, queryResponse.Code)
+	}
+}
+
+func TestHandleReadingsRateLimitsByClientIP(t *testing.T) {
+	store := &fakeStore{}
+	api := NewAPI(
+		store,
+		"secret",
+		WithReadRateLimit(ReadRateLimitConfig{Requests: 2, Window: time.Minute}),
+	)
+	handler := api.Handler()
+
+	for index := 0; index < 2; index++ {
+		request := httptest.NewRequest(http.MethodGet, "/api/readings?limit=1", nil)
+		request.RemoteAddr = "203.0.113.2:5050"
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("expected status %d for request %d, got %d", http.StatusOK, index+1, response.Code)
+		}
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/api/readings?limit=1", nil)
+	request.RemoteAddr = "203.0.113.2:5050"
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected status %d, got %d", http.StatusTooManyRequests, response.Code)
+	}
+	if response.Header().Get("Retry-After") == "" {
+		t.Fatalf("expected Retry-After header")
 	}
 }
 
@@ -506,6 +715,27 @@ func TestHandleReadingsRangeQuery(t *testing.T) {
 	}
 	if store.rangePoints != 2 {
 		t.Fatalf("expected max_points=2, got %d", store.rangePoints)
+	}
+}
+
+func TestHandleReadingsRangePassesDeviceID(t *testing.T) {
+	store := &fakeStore{}
+	api := NewAPI(store, "secret")
+	handler := api.Handler()
+
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/api/readings?from=1738886400000&to=1738889999000&device_id=pi-1&max_points=2",
+		nil,
+	)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, response.Code)
+	}
+	if store.rangeDevice != "pi-1" {
+		t.Fatalf("expected device_id pi-1, got %q", store.rangeDevice)
 	}
 }
 
@@ -566,6 +796,49 @@ func TestHandleReadingsReturnsLiveBufferWithoutStoreQuery(t *testing.T) {
 	}
 	if payload.Readings[0].Timestamp != 1738886400 {
 		t.Fatalf("expected timestamp 1738886400, got %d", payload.Readings[0].Timestamp)
+	}
+}
+
+func TestHandleReadingsLiveBufferFiltersDeviceID(t *testing.T) {
+	store := &fakeStore{
+		latestErr: errors.New("store should not be called"),
+	}
+	api := NewAPI(store, "secret")
+	handler := api.Handler()
+
+	for _, payload := range []string{
+		`{"device_id":"pi-1","timestamp":"1738886400","temperature":"22.4","pressure":"101305","humidity":"40.1","oxidised":"1.2","reduced":"1.1","nh3":"0.7","pm1":"2","pm2":"3","pm10":"4"}`,
+		`{"device_id":"pi-2","timestamp":"1738886401","temperature":"22.5","pressure":"101300","humidity":"40.2","oxidised":"1.3","reduced":"1.0","nh3":"0.8","pm1":"3","pm2":"4","pm10":"5"}`,
+	} {
+		liveRequest := httptest.NewRequest(http.MethodPost, "/api/live", bytes.NewBufferString(payload))
+		liveRequest.Header.Set("Content-Type", "application/json")
+		liveRequest.Header.Set("X-API-Key", "secret")
+		liveResponse := httptest.NewRecorder()
+		handler.ServeHTTP(liveResponse, liveRequest)
+		if liveResponse.Code != http.StatusAccepted {
+			t.Fatalf("expected live status %d, got %d", http.StatusAccepted, liveResponse.Code)
+		}
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/api/readings?source=live&limit=10&device_id=pi-2", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, response.Code)
+	}
+
+	var payload struct {
+		Readings []SensorReading `json:"readings"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if len(payload.Readings) != 1 {
+		t.Fatalf("expected one live reading, got %d", len(payload.Readings))
+	}
+	if payload.Readings[0].DeviceID != "pi-2" {
+		t.Fatalf("expected pi-2 reading, got %q", payload.Readings[0].DeviceID)
 	}
 }
 
@@ -753,7 +1026,7 @@ func TestHandleAlertsReturnsServiceUnavailableWhenSnapshotNotReady(t *testing.T)
 	}
 }
 
-func TestHandleInsightsNoRequestRateLimit(t *testing.T) {
+func TestHandleInsightsAllowsDefaultReadRateBurst(t *testing.T) {
 	store := &fakeStore{}
 	engine := &fakeInsightsEngine{
 		ready: true,
@@ -783,6 +1056,47 @@ func TestHandleInsightsNoRequestRateLimit(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, response.Code)
+	}
+}
+
+func TestRangeBucketSeconds(t *testing.T) {
+	tests := []struct {
+		name          string
+		fromTimestamp int64
+		toTimestamp   int64
+		maxPoints     int
+		want          int64
+	}{
+		{
+			name:          "one second bucket when range fits",
+			fromTimestamp: 100,
+			toTimestamp:   199,
+			maxPoints:     100,
+			want:          1,
+		},
+		{
+			name:          "ceil range into max points",
+			fromTimestamp: 100,
+			toTimestamp:   199,
+			maxPoints:     30,
+			want:          4,
+		},
+		{
+			name:          "invalid range falls back",
+			fromTimestamp: 100,
+			toTimestamp:   100,
+			maxPoints:     30,
+			want:          1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := rangeBucketSeconds(test.fromTimestamp, test.toTimestamp, test.maxPoints)
+			if got != test.want {
+				t.Fatalf("expected %d, got %d", test.want, got)
+			}
+		})
 	}
 }
 
@@ -832,6 +1146,51 @@ func TestHandleOpsEventsReturnsPersistedEvents(t *testing.T) {
 	}
 }
 
+func TestHandleOpsEventsCanReturnLiveBuffer(t *testing.T) {
+	store := &fakeOpsStore{
+		fakeStore: &fakeStore{},
+		events: []OpsEvent{
+			{
+				ID:        1,
+				Timestamp: 1738886400000,
+				Kind:      "persisted_only",
+				Title:     "Persisted only",
+				Detail:    "Stored event.",
+			},
+		},
+	}
+	api := NewAPI(store, "secret")
+	api.ops.add(OpsEvent{
+		ID:        99,
+		Timestamp: 1738886460000,
+		Kind:      "live_only",
+		Title:     "Live only",
+		Detail:    "Buffered event.",
+	})
+	handler := api.Handler()
+
+	request := httptest.NewRequest(http.MethodGet, "/api/ops/events?source=live&limit=1", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, response.Code)
+	}
+
+	var payload struct {
+		Events []OpsEvent `json:"events"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if len(payload.Events) != 1 {
+		t.Fatalf("expected one event, got %d", len(payload.Events))
+	}
+	if payload.Events[0].Kind != "live_only" {
+		t.Fatalf("expected live buffer event, got %q", payload.Events[0].Kind)
+	}
+}
+
 func TestHandleOpsEventsRejectsInvalidLimit(t *testing.T) {
 	store := &fakeOpsStore{fakeStore: &fakeStore{}}
 	api := NewAPI(store, "secret")
@@ -872,14 +1231,11 @@ func TestHandleOpsEventsReturnsBufferedEventsWhenDurableStoreUnavailable(t *test
 		t.Fatalf("decode payload: %v", err)
 	}
 
-	if len(payload.Events) != 2 {
-		t.Fatalf("expected two buffered events, got %d", len(payload.Events))
+	if len(payload.Events) != 1 {
+		t.Fatalf("expected one buffered event, got %d", len(payload.Events))
 	}
 	if payload.Events[0].Kind != "device_connected" {
 		t.Fatalf("expected most recent buffered event to be device_connected, got %q", payload.Events[0].Kind)
-	}
-	if payload.Events[1].Kind != "backend_restarted" {
-		t.Fatalf("expected buffered backend_restarted event, got %q", payload.Events[1].Kind)
 	}
 }
 

@@ -23,6 +23,8 @@ type PostgresStore struct {
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
 
+const migrationNoTransactionMarker = "-- migrate: no-transaction"
+
 func NewPostgresStore(ctx context.Context, databaseURL string, maxConns int32) (*PostgresStore, error) {
 	config, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
@@ -88,13 +90,24 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		if err != nil {
 			return err
 		}
+		sqlText := string(sqlBytes)
+
+		if strings.Contains(sqlText, migrationNoTransactionMarker) {
+			if err = store.execMigrationStatements(ctx, sqlText); err != nil {
+				return err
+			}
+			if _, err = store.pool.Exec(ctx, `INSERT INTO schema_migrations (version) VALUES ($1)`, version); err != nil {
+				return err
+			}
+			continue
+		}
 
 		tx, err := store.pool.Begin(ctx)
 		if err != nil {
 			return err
 		}
 
-		if _, err = tx.Exec(ctx, string(sqlBytes)); err != nil {
+		if _, err = tx.Exec(ctx, sqlText); err != nil {
 			_ = tx.Rollback(ctx)
 			return err
 		}
@@ -112,6 +125,29 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 	return nil
 }
 
+func (store *PostgresStore) execMigrationStatements(ctx context.Context, sqlText string) error {
+	for _, statement := range strings.Split(sqlText, ";") {
+		statement = strings.TrimSpace(statement)
+		if !hasExecutableSQL(statement) {
+			continue
+		}
+		if _, err := store.pool.Exec(ctx, statement); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func hasExecutableSQL(statement string) bool {
+	for _, line := range strings.Split(statement, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "--") {
+			return true
+		}
+	}
+	return false
+}
+
 func (store *PostgresStore) isMigrationApplied(ctx context.Context, version string) (bool, error) {
 	const query = `SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version = $1)`
 	var exists bool
@@ -123,14 +159,25 @@ func (store *PostgresStore) isMigrationApplied(ctx context.Context, version stri
 
 func (store *PostgresStore) Add(ctx context.Context, reading SensorReading) error {
 	const insertReadingQuery = `
-INSERT INTO sensor_readings (
-  timestamp, temperature, pressure, humidity, oxidised, reduced, nh3, pm1, pm2, pm10
-) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-`
+	INSERT INTO sensor_readings (
+	  device_id, timestamp, temperature, pressure, humidity, oxidised, reduced, nh3, pm1, pm2, pm10
+	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+	ON CONFLICT (device_id, timestamp) DO UPDATE SET
+	  temperature = EXCLUDED.temperature,
+	  pressure = EXCLUDED.pressure,
+	  humidity = EXCLUDED.humidity,
+	  oxidised = EXCLUDED.oxidised,
+	  reduced = EXCLUDED.reduced,
+	  nh3 = EXCLUDED.nh3,
+	  pm1 = EXCLUDED.pm1,
+	  pm2 = EXCLUDED.pm2,
+	  pm10 = EXCLUDED.pm10
+	`
 
 	_, err := store.pool.Exec(
 		ctx,
 		insertReadingQuery,
+		readingDeviceID(reading),
 		reading.Timestamp,
 		reading.Temperature,
 		reading.Pressure,
@@ -149,12 +196,23 @@ func (store *PostgresStore) AddBatch(ctx context.Context, readings []SensorReadi
 	if len(readings) == 0 {
 		return nil
 	}
+	readings = dedupeSensorReadings(readings)
 
 	const insertReadingQuery = `
-INSERT INTO sensor_readings (
-  timestamp, temperature, pressure, humidity, oxidised, reduced, nh3, pm1, pm2, pm10
-) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-`
+	INSERT INTO sensor_readings (
+	  device_id, timestamp, temperature, pressure, humidity, oxidised, reduced, nh3, pm1, pm2, pm10
+	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+	ON CONFLICT (device_id, timestamp) DO UPDATE SET
+	  temperature = EXCLUDED.temperature,
+	  pressure = EXCLUDED.pressure,
+	  humidity = EXCLUDED.humidity,
+	  oxidised = EXCLUDED.oxidised,
+	  reduced = EXCLUDED.reduced,
+	  nh3 = EXCLUDED.nh3,
+	  pm1 = EXCLUDED.pm1,
+	  pm2 = EXCLUDED.pm2,
+	  pm10 = EXCLUDED.pm10
+	`
 
 	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -165,6 +223,7 @@ INSERT INTO sensor_readings (
 	for _, reading := range readings {
 		batch.Queue(
 			insertReadingQuery,
+			readingDeviceID(reading),
 			reading.Timestamp,
 			reading.Temperature,
 			reading.Pressure,
@@ -197,9 +256,9 @@ func (store *PostgresStore) Latest(ctx context.Context, limit int) ([]SensorRead
 	}
 
 	const query = `
-SELECT timestamp, temperature, pressure, humidity, oxidised, reduced, nh3, pm1, pm2, pm10
-FROM sensor_readings
-ORDER BY id DESC
+	SELECT device_id, timestamp, temperature, pressure, humidity, oxidised, reduced, nh3, pm1, pm2, pm10
+	FROM sensor_readings
+	ORDER BY id DESC
 LIMIT $1
 `
 
@@ -213,6 +272,7 @@ LIMIT $1
 	for rows.Next() {
 		var reading SensorReading
 		if err := rows.Scan(
+			&reading.DeviceID,
 			&reading.Timestamp,
 			&reading.Temperature,
 			&reading.Pressure,
@@ -244,56 +304,66 @@ func (store *PostgresStore) Range(
 	ctx context.Context,
 	fromTimestamp int64,
 	toTimestamp int64,
+	deviceID string,
 	maxPoints int,
 ) ([]SensorReading, error) {
 	if maxPoints <= 0 {
 		maxPoints = 1000
 	}
 
-	const countQuery = `
-SELECT COUNT(*)
-FROM sensor_readings
-WHERE timestamp >= $1 AND timestamp <= $2
-`
-
-	var totalRows int64
-	if err := store.pool.QueryRow(ctx, countQuery, fromTimestamp, toTimestamp).Scan(&totalRows); err != nil {
-		return nil, err
-	}
-	if totalRows == 0 {
-		return []SensorReading{}, nil
-	}
-
-	stride := int64(1)
-	if totalRows > int64(maxPoints) {
-		stride = (totalRows + int64(maxPoints) - 1) / int64(maxPoints)
-	}
+	bucketSeconds := rangeBucketSeconds(fromTimestamp, toTimestamp, maxPoints)
 
 	const rangeQuery = `
-WITH ranked AS (
-  SELECT
-    timestamp,
-    temperature,
-    pressure,
-    humidity,
-    oxidised,
-    reduced,
-    nh3,
-    pm1,
-    pm2,
-    pm10,
-    ROW_NUMBER() OVER (ORDER BY id ASC) AS row_num
-  FROM sensor_readings
-  WHERE timestamp >= $1 AND timestamp <= $2
-)
-SELECT timestamp, temperature, pressure, humidity, oxidised, reduced, nh3, pm1, pm2, pm10
-FROM ranked
-WHERE ((row_num - 1) % $3) = 0
-ORDER BY row_num ASC
-LIMIT $4
-`
+	WITH selected_device AS (
+	  SELECT COALESCE(
+	    NULLIF($4, ''),
+	    (
+	      SELECT device_id
+	      FROM sensor_readings
+	      WHERE timestamp >= $1 AND timestamp <= $2
+	      ORDER BY timestamp DESC, id DESC
+	      LIMIT 1
+	    )
+	  ) AS device_id
+	),
+	bucketed AS (
+	  SELECT
+	    ((readings.timestamp - $1) / $3) AS bucket,
+	    readings.device_id,
+	    MIN(readings.timestamp) AS timestamp,
+	    AVG(temperature) AS temperature,
+	    AVG(pressure) AS pressure,
+	    AVG(humidity) AS humidity,
+	    AVG(oxidised) AS oxidised,
+	    AVG(reduced) AS reduced,
+	    AVG(nh3) AS nh3,
+	    AVG(pm1) AS pm1,
+	    AVG(pm2) AS pm2,
+	    AVG(pm10) AS pm10,
+	    MAX(pm1) AS pm1_max,
+	    MAX(pm2) AS pm2_max,
+	    MAX(pm10) AS pm10_max
+	  FROM sensor_readings AS readings
+	  JOIN selected_device ON selected_device.device_id = readings.device_id
+	  WHERE selected_device.device_id IS NOT NULL
+	    AND readings.timestamp >= $1 AND readings.timestamp <= $2
+	  GROUP BY readings.device_id, ((readings.timestamp - $1) / $3)
+	)
+	SELECT device_id, timestamp, temperature, pressure, humidity, oxidised, reduced, nh3, pm1, pm2, pm10, pm1_max, pm2_max, pm10_max
+	FROM bucketed
+	ORDER BY timestamp ASC
+	LIMIT $5
+	`
 
-	rows, err := store.pool.Query(ctx, rangeQuery, fromTimestamp, toTimestamp, stride, maxPoints)
+	rows, err := store.pool.Query(
+		ctx,
+		rangeQuery,
+		fromTimestamp,
+		toTimestamp,
+		bucketSeconds,
+		strings.TrimSpace(deviceID),
+		maxPoints,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -302,7 +372,11 @@ LIMIT $4
 	readings := make([]SensorReading, 0, maxPoints)
 	for rows.Next() {
 		var reading SensorReading
+		var pm1Max float64
+		var pm2Max float64
+		var pm10Max float64
 		if err = rows.Scan(
+			&reading.DeviceID,
 			&reading.Timestamp,
 			&reading.Temperature,
 			&reading.Pressure,
@@ -313,9 +387,15 @@ LIMIT $4
 			&reading.PM1,
 			&reading.PM2,
 			&reading.PM10,
+			&pm1Max,
+			&pm2Max,
+			&pm10Max,
 		); err != nil {
 			return nil, err
 		}
+		reading.PM1Max = float64Ptr(pm1Max)
+		reading.PM2Max = float64Ptr(pm2Max)
+		reading.PM10Max = float64Ptr(pm10Max)
 		readings = append(readings, reading)
 	}
 
@@ -324,6 +404,47 @@ LIMIT $4
 	}
 
 	return readings, nil
+}
+
+func rangeBucketSeconds(fromTimestamp int64, toTimestamp int64, maxPoints int) int64 {
+	if maxPoints <= 0 || toTimestamp <= fromTimestamp {
+		return 1
+	}
+
+	durationSeconds := toTimestamp - fromTimestamp + 1
+	if durationSeconds <= int64(maxPoints) {
+		return 1
+	}
+	return (durationSeconds + int64(maxPoints) - 1) / int64(maxPoints)
+}
+
+func readingDeviceID(reading SensorReading) string {
+	if strings.TrimSpace(reading.DeviceID) == "" {
+		return defaultDeviceID
+	}
+	return reading.DeviceID
+}
+
+func dedupeSensorReadings(readings []SensorReading) []SensorReading {
+	deduped := make([]SensorReading, 0, len(readings))
+	indexes := make(map[string]int, len(readings))
+	for _, reading := range readings {
+		key := readingBatchKey(SensorReading{
+			DeviceID:  readingDeviceID(reading),
+			Timestamp: reading.Timestamp,
+		})
+		if existingIndex, ok := indexes[key]; ok {
+			deduped[existingIndex] = reading
+			continue
+		}
+		indexes[key] = len(deduped)
+		deduped = append(deduped, reading)
+	}
+	return deduped
+}
+
+func float64Ptr(value float64) *float64 {
+	return &value
 }
 
 func (store *PostgresStore) DeleteOlderThan(ctx context.Context, cutoffTimestamp int64, limit int) (int64, error) {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -19,22 +20,30 @@ const (
 	maxIngestBodyBytes = 1 << 20
 	maxBatchBodyBytes  = 4 << 20
 	maxBatchSize       = 1000
-	maxReadingsLimit   = 100000
+	maxReadingsLimit   = 2500
 	maxOpsEventsLimit  = 200
 	maxInsightsLimit   = 3
 )
 
 type readingsRangeStore interface {
-	Range(ctx context.Context, fromTimestamp int64, toTimestamp int64, maxPoints int) ([]SensorReading, error)
+	Range(
+		ctx context.Context,
+		fromTimestamp int64,
+		toTimestamp int64,
+		deviceID string,
+		maxPoints int,
+	) ([]SensorReading, error)
 }
 
 type API struct {
 	store                   Store
 	ingestAPIKey            string
+	readAPIKey              string
 	trustProxyIP            bool
 	stream                  *streamHub
 	live                    *liveBuffer
 	ops                     *opsEventBuffer
+	readRateLimiter         *readRateLimiter
 	alertAnalyzer           AlertAnalyzer
 	insightsEngine          InsightsEngine
 	insightsSchedulerConfig InsightsSchedulerConfig
@@ -74,6 +83,18 @@ func WithTrustProxyIP(enabled bool) APIOption {
 	}
 }
 
+func WithReadAPIKey(readAPIKey string) APIOption {
+	return func(api *API) {
+		api.readAPIKey = strings.TrimSpace(readAPIKey)
+	}
+}
+
+func WithReadRateLimit(config ReadRateLimitConfig) APIOption {
+	return func(api *API) {
+		api.readRateLimiter = newReadRateLimiter(config)
+	}
+}
+
 func WithOpsConfig(config OpsConfig) APIOption {
 	return func(api *API) {
 		api.opsConfig = config
@@ -93,6 +114,7 @@ func NewAPI(store Store, ingestAPIKey string, options ...APIOption) *API {
 		ingestAPIKey:            normalizedIngestAPIKey,
 		stream:                  newStreamHub(),
 		ops:                     newOpsEventBuffer(maxOpsEventsLimit),
+		readRateLimiter:         newReadRateLimiter(DefaultReadRateLimitConfig()),
 		insightsSchedulerConfig: DefaultInsightsSchedulerConfig(),
 		opsConfig:               DefaultOpsConfig(),
 		liveBufferLimit:         3600,
@@ -110,14 +132,16 @@ func NewAPI(store Store, ingestAPIKey string, options ...APIOption) *API {
 
 	if opsStore, ok := store.(OpsEventStore); ok {
 		api.opsEventStore = opsStore
-		api.initializeDeviceState()
 		api.startDeviceMonitor(context.Background())
-		api.persistOpsEvent(
-			"backend_restarted",
-			"Backend restarted",
-			"Ops event monitoring is active.",
-			time.Now().UnixMilli(),
-		)
+		if durableStoreReady(store) {
+			api.initializeDeviceState()
+			api.persistOpsEvent(
+				"backend_restarted",
+				"Backend restarted",
+				"Ops event monitoring is active.",
+				time.Now().UnixMilli(),
+			)
+		}
 	}
 
 	return api
@@ -130,11 +154,20 @@ func (api *API) Handler() http.Handler {
 	mux.HandleFunc("/api/ingest", api.handleIngest)
 	mux.HandleFunc("/api/ingest/batch", api.handleIngestBatch)
 	mux.HandleFunc("/api/live", api.handleLive)
+	mux.HandleFunc("/api/live/status", api.handleLiveStatus)
 	mux.HandleFunc("/api/readings", api.handleReadings)
 	mux.HandleFunc("/api/stream", api.handleStream)
 	mux.HandleFunc("/api/insights", api.handleInsights)
 	mux.HandleFunc("/api/ops/events", api.handleOpsEvents)
 	return mux
+}
+
+func durableStoreReady(store Store) bool {
+	availability, ok := store.(interface{ HasStore() bool })
+	if !ok {
+		return true
+	}
+	return availability.HasStore()
 }
 
 func (api *API) handleHealth(response http.ResponseWriter, request *http.Request) {
@@ -327,9 +360,28 @@ func (api *API) handleLive(response http.ResponseWriter, request *http.Request) 
 	writeJSON(response, http.StatusAccepted, map[string]string{"status": "accepted"})
 }
 
+func (api *API) handleLiveStatus(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		writeError(response, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	if !api.authorizeIngestRequest(response, request) {
+		return
+	}
+
+	deviceID := strings.TrimSpace(request.URL.Query().Get("device_id"))
+	writeJSON(response, http.StatusOK, map[string]any{
+		"subscriber_count": api.stream.subscriberCount(deviceID),
+	})
+}
+
 func (api *API) handleReadings(response http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodGet {
 		writeError(response, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !api.authorizeReadRequest(response, request) || !api.allowReadRequest(response, request) {
 		return
 	}
 
@@ -380,6 +432,7 @@ func (api *API) handleReadings(response http.ResponseWriter, request *http.Reque
 			request.Context(),
 			fromTimestamp,
 			toTimestamp,
+			strings.TrimSpace(request.URL.Query().Get("device_id")),
 			maxPoints,
 		)
 		if readingsErr != nil {
@@ -410,9 +463,10 @@ func (api *API) handleReadings(response http.ResponseWriter, request *http.Reque
 	}
 
 	source := strings.TrimSpace(request.URL.Query().Get("source"))
+	deviceID := strings.TrimSpace(request.URL.Query().Get("device_id"))
 	var readings []SensorReading
 	if source == "live" {
-		readings = api.live.latest(limit)
+		readings = api.live.latestForDevice(limit, deviceID)
 	} else {
 		var err error
 		readings, err = api.store.Latest(request.Context(), limit)
@@ -446,6 +500,9 @@ func (api *API) handleStream(response http.ResponseWriter, request *http.Request
 		writeError(response, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	if !api.authorizeReadRequest(response, request) || !api.allowReadRequest(response, request) {
+		return
+	}
 
 	flusher, ok := response.(http.Flusher)
 	if !ok {
@@ -458,7 +515,8 @@ func (api *API) handleStream(response http.ResponseWriter, request *http.Request
 	response.Header().Set("Connection", "keep-alive")
 	response.Header().Set("X-Accel-Buffering", "no")
 
-	channel, unsubscribe := api.stream.subscribe()
+	deviceID := strings.TrimSpace(request.URL.Query().Get("device_id"))
+	channel, unsubscribe := api.stream.subscribe(deviceID)
 	defer unsubscribe()
 
 	heartbeatTicker := time.NewTicker(25 * time.Second)
@@ -489,6 +547,9 @@ func (api *API) handleStream(response http.ResponseWriter, request *http.Request
 func (api *API) handleInsights(response http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodGet {
 		writeError(response, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !api.authorizeReadRequest(response, request) || !api.allowReadRequest(response, request) {
 		return
 	}
 
@@ -532,6 +593,9 @@ func (api *API) handleOpsEvents(response http.ResponseWriter, request *http.Requ
 		writeError(response, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	if !api.authorizeReadRequest(response, request) || !api.allowReadRequest(response, request) {
+		return
+	}
 
 	limit := 30
 	if rawLimit := request.URL.Query().Get("limit"); rawLimit != "" {
@@ -547,7 +611,7 @@ func (api *API) handleOpsEvents(response http.ResponseWriter, request *http.Requ
 		limit = parsedLimit
 	}
 
-	if api.opsEventStore == nil {
+	if strings.TrimSpace(request.URL.Query().Get("source")) == "live" || api.opsEventStore == nil {
 		writeJSON(response, http.StatusOK, map[string]any{"events": api.ops.latest(limit)})
 		return
 	}
@@ -573,6 +637,74 @@ func (api *API) authorizeIngestRequest(response http.ResponseWriter, request *ht
 		return false
 	}
 	return true
+}
+
+func (api *API) authorizeReadRequest(response http.ResponseWriter, request *http.Request) bool {
+	if api.readAPIKey == "" {
+		return true
+	}
+
+	providedKey := strings.TrimSpace(request.Header.Get("X-Read-API-Key"))
+	if providedKey == "" {
+		providedKey = strings.TrimSpace(request.Header.Get("X-API-Key"))
+	}
+	if providedKey == "" {
+		providedKey = strings.TrimSpace(request.URL.Query().Get("read_key"))
+	}
+	if providedKey == "" {
+		if cookie, err := request.Cookie("read_api_key"); err == nil {
+			providedKey = strings.TrimSpace(cookie.Value)
+		}
+	}
+	if subtle.ConstantTimeCompare([]byte(providedKey), []byte(api.readAPIKey)) != 1 {
+		log.Printf("read unauthorized path=%s remote=%s", request.URL.Path, request.RemoteAddr)
+		writeError(response, http.StatusUnauthorized, "unauthorized")
+		return false
+	}
+	return true
+}
+
+func (api *API) allowReadRequest(response http.ResponseWriter, request *http.Request) bool {
+	if api.readRateLimiter == nil {
+		return true
+	}
+
+	allowed, retryAfter := api.readRateLimiter.allow(api.clientIP(request))
+	if allowed {
+		return true
+	}
+
+	retrySeconds := int((retryAfter + time.Second - 1) / time.Second)
+	if retrySeconds < 1 {
+		retrySeconds = 1
+	}
+	response.Header().Set("Retry-After", strconv.Itoa(retrySeconds))
+	writeError(response, http.StatusTooManyRequests, "rate limit exceeded")
+	return false
+}
+
+func (api *API) clientIP(request *http.Request) string {
+	if api.trustProxyIP {
+		forwardedFor := strings.TrimSpace(request.Header.Get("X-Forwarded-For"))
+		if forwardedFor != "" {
+			clientIP, _, _ := strings.Cut(forwardedFor, ",")
+			clientIP = strings.TrimSpace(clientIP)
+			if parsedIP := net.ParseIP(clientIP); parsedIP != nil {
+				return parsedIP.String()
+			}
+		}
+
+		realIP := strings.TrimSpace(request.Header.Get("X-Real-IP"))
+		if parsedIP := net.ParseIP(realIP); parsedIP != nil {
+			return parsedIP.String()
+		}
+	}
+
+	host, _, err := net.SplitHostPort(request.RemoteAddr)
+	if err == nil {
+		return host
+	}
+	return request.RemoteAddr
 }
 
 func (api *API) publishLive(reading SensorReading) {

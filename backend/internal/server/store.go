@@ -17,8 +17,10 @@ type Store interface {
 }
 
 type RuntimeStore struct {
-	mu    sync.RWMutex
-	store Store
+	mu        sync.RWMutex
+	connectMu sync.Mutex
+	store     Store
+	connect   func(context.Context) (Store, error)
 }
 
 func NewRuntimeStore(store Store) *RuntimeStore {
@@ -37,8 +39,14 @@ func (store *RuntimeStore) Set(next Store) {
 	store.mu.Unlock()
 }
 
+func (store *RuntimeStore) SetConnector(connect func(context.Context) (Store, error)) {
+	store.mu.Lock()
+	store.connect = connect
+	store.mu.Unlock()
+}
+
 func (store *RuntimeStore) Add(ctx context.Context, reading SensorReading) error {
-	current := store.current()
+	current := store.currentOrConnect(ctx)
 	if current == nil {
 		return ErrStoreUnavailable
 	}
@@ -46,7 +54,7 @@ func (store *RuntimeStore) Add(ctx context.Context, reading SensorReading) error
 }
 
 func (store *RuntimeStore) AddBatch(ctx context.Context, readings []SensorReading) error {
-	current := store.current()
+	current := store.currentOrConnect(ctx)
 	if current == nil {
 		return ErrStoreUnavailable
 	}
@@ -54,7 +62,7 @@ func (store *RuntimeStore) AddBatch(ctx context.Context, readings []SensorReadin
 }
 
 func (store *RuntimeStore) Latest(ctx context.Context, limit int) ([]SensorReading, error) {
-	current := store.current()
+	current := store.currentOrConnect(ctx)
 	if current == nil {
 		return nil, ErrStoreUnavailable
 	}
@@ -65,9 +73,10 @@ func (store *RuntimeStore) Range(
 	ctx context.Context,
 	fromTimestamp int64,
 	toTimestamp int64,
+	deviceID string,
 	maxPoints int,
 ) ([]SensorReading, error) {
-	current := store.current()
+	current := store.currentOrConnect(ctx)
 	if current == nil {
 		return nil, ErrStoreUnavailable
 	}
@@ -77,11 +86,11 @@ func (store *RuntimeStore) Range(
 		return nil, ErrStoreUnavailable
 	}
 
-	return rangeStore.Range(ctx, fromTimestamp, toTimestamp, maxPoints)
+	return rangeStore.Range(ctx, fromTimestamp, toTimestamp, deviceID, maxPoints)
 }
 
 func (store *RuntimeStore) Ping(ctx context.Context) error {
-	current := store.current()
+	current := store.currentOrConnect(ctx)
 	if current == nil {
 		return ErrStoreUnavailable
 	}
@@ -100,7 +109,7 @@ func (store *RuntimeStore) SaveInsightsSnapshot(
 	ctx context.Context,
 	snapshot InsightsSnapshot,
 ) error {
-	current := store.current()
+	current := store.currentOrConnect(ctx)
 	if current == nil {
 		return ErrStoreUnavailable
 	}
@@ -116,7 +125,7 @@ func (store *RuntimeStore) SaveInsightsSnapshot(
 func (store *RuntimeStore) LatestInsightsSnapshot(
 	ctx context.Context,
 ) (InsightsSnapshot, bool, error) {
-	current := store.current()
+	current := store.currentOrConnect(ctx)
 	if current == nil {
 		return InsightsSnapshot{}, false, ErrStoreUnavailable
 	}
@@ -130,7 +139,7 @@ func (store *RuntimeStore) LatestInsightsSnapshot(
 }
 
 func (store *RuntimeStore) AddOpsEvent(ctx context.Context, event OpsEvent) error {
-	current := store.current()
+	current := store.currentOrConnect(ctx)
 	if current == nil {
 		return ErrStoreUnavailable
 	}
@@ -144,7 +153,7 @@ func (store *RuntimeStore) AddOpsEvent(ctx context.Context, event OpsEvent) erro
 }
 
 func (store *RuntimeStore) LatestOpsEvents(ctx context.Context, limit int) ([]OpsEvent, error) {
-	current := store.current()
+	current := store.currentOrConnect(ctx)
 	if current == nil {
 		return nil, ErrStoreUnavailable
 	}
@@ -161,4 +170,32 @@ func (store *RuntimeStore) current() Store {
 	store.mu.RLock()
 	defer store.mu.RUnlock()
 	return store.store
+}
+
+func (store *RuntimeStore) currentOrConnect(ctx context.Context) Store {
+	current, connect := store.currentAndConnector()
+	if current != nil || connect == nil {
+		return current
+	}
+
+	store.connectMu.Lock()
+	defer store.connectMu.Unlock()
+
+	current, connect = store.currentAndConnector()
+	if current != nil || connect == nil {
+		return current
+	}
+
+	next, err := connect(ctx)
+	if err != nil {
+		return nil
+	}
+	store.Set(next)
+	return next
+}
+
+func (store *RuntimeStore) currentAndConnector() (Store, func(context.Context) (Store, error)) {
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	return store.store, store.connect
 }
