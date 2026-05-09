@@ -249,6 +249,34 @@ func TestRecomputePrefersNewerLiveReadings(t *testing.T) {
 	}
 }
 
+func TestRecomputeSeedsEventBaselineFromAnalyzedReadings(t *testing.T) {
+	store := &fakeStore{
+		latest: []SensorReading{
+			{
+				Timestamp:   1738886400,
+				Temperature: 30.8,
+				Humidity:    23,
+				PM2:         4,
+				PM10:        7,
+			},
+		},
+	}
+	analyzer := &fakeAlertAnalyzer{}
+	scheduler := NewInsightsScheduler(store, analyzer, testInsightsSchedulerConfig())
+
+	scheduler.recompute("startup")
+
+	if !scheduler.shouldTriggerFromReading(SensorReading{
+		Timestamp:   1738886460,
+		Temperature: 22.1,
+		Humidity:    30,
+		PM2:         4,
+		PM10:        7,
+	}) {
+		t.Fatalf("expected first fresh live reading to invalidate stale startup analysis")
+	}
+}
+
 func TestEventRecomputeUsesLiveReadingsWithoutDurableRead(t *testing.T) {
 	store := &fakeStore{}
 	analyzer := &fakeAlertAnalyzer{}

@@ -439,10 +439,18 @@ func (scheduler *InsightsScheduler) recompute(trigger string) {
 		AnalysisLimit:   scheduler.config.AnalysisLimit,
 		Trigger:         trigger,
 	}
+	var latestAnalyzed *SensorReading
+	if len(readings) > 0 {
+		latest := readings[len(readings)-1]
+		latestAnalyzed = &latest
+	}
 
 	scheduler.mu.Lock()
 	scheduler.snapshot = snapshot
 	scheduler.hasSnapshot = true
+	if latestAnalyzed != nil {
+		scheduler.lastReading = latestAnalyzed
+	}
 	scheduler.mu.Unlock()
 
 	if scheduler.snapshotStore != nil && analysisSource != insightsAnalysisSourceLive {
