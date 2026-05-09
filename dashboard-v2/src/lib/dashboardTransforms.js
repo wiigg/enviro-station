@@ -334,6 +334,31 @@ export function appendReadingForWindow(readings, reading, windowOption) {
   return downsampleReadings(nextReadings, windowOption.queryMaxPoints);
 }
 
+export function mergeReadingsForWindow(readingSets, windowOption) {
+  const merged = new Map();
+  for (const readings of readingSets) {
+    for (const reading of readings) {
+      const key = `${reading.deviceId ?? ""}:${reading.timestamp}`;
+      merged.set(key, reading);
+    }
+  }
+
+  const sortedReadings = Array.from(merged.values()).sort(
+    (left, right) => left.timestamp - right.timestamp
+  );
+  if (sortedReadings.length === 0) {
+    return [];
+  }
+
+  const latestTimestamp = sortedReadings[sortedReadings.length - 1].timestamp;
+  const cutoffTimestamp =
+    latestTimestamp - (windowOption.retainedRangeMs ?? windowOption.rangeMs);
+  return downsampleReadings(
+    sortedReadings.filter((reading) => reading.timestamp >= cutoffTimestamp),
+    windowOption.queryMaxPoints
+  );
+}
+
 export function normalizeInsight(rawInsight) {
   if (!rawInsight || typeof rawInsight !== "object") {
     return null;

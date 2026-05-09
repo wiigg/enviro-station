@@ -15,8 +15,23 @@ import {
 } from "../lib/dashboardConfig";
 import {
   appendReadingForWindow,
-  buildHistoryUrl
+  buildHistoryUrl,
+  mergeReadingsForWindow
 } from "../lib/dashboardTransforms";
+
+function buildLiveOverlayUrl(backendBaseUrl, windowOption) {
+  const url = new URL(`${backendBaseUrl}/api/readings`);
+  url.searchParams.set("limit", String(windowOption.queryMaxPoints));
+  url.searchParams.set("source", "live");
+  if (DASHBOARD_DEVICE_ID) {
+    url.searchParams.set("device_id", DASHBOARD_DEVICE_ID);
+  }
+  return url.toString();
+}
+
+function shouldOverlayLiveReadings(windowId) {
+  return STREAM_WINDOW_IDS.includes(windowId) && !LIVE_SOURCE_WINDOW_IDS.has(windowId);
+}
 
 function useReadingsHistoryWindows({
   backendBaseUrl,
@@ -48,7 +63,24 @@ function useReadingsHistoryWindows({
         throw new Error(errorMessage);
       }
 
-      const normalized = normalizeReadings(payload.readings);
+      let normalized = normalizeReadings(payload.readings);
+      if (shouldOverlayLiveReadings(targetWindowId)) {
+        const liveUrl = buildLiveOverlayUrl(backendBaseUrl, targetWindow);
+        const liveResponse = await fetch(liveUrl, buildReadRequestOptions(signal));
+        const livePayload = await parseJSONResponse(
+          liveResponse,
+          `${targetWindow.label} live overlay endpoint`,
+          liveUrl,
+          backendBaseUrl
+        );
+
+        if (liveResponse.ok) {
+          normalized = mergeReadingsForWindow(
+            [normalized, normalizeReadings(livePayload.readings)],
+            targetWindow
+          );
+        }
+      }
       historyCacheRef.current[targetWindowId] = {
         readings: normalized,
         fetchedAt: Date.now(),
