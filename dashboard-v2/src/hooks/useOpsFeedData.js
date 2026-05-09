@@ -15,7 +15,7 @@ export function useOpsFeedData(backendBaseUrl) {
   const pollOpsFeed = useCallback(
     async ({ signal, isClosed }) => {
       try {
-        const opsFeedUrl = `${backendBaseUrl}/api/ops/events?limit=${OPS_FEED_MAX_ITEMS}`;
+        const opsFeedUrl = `${backendBaseUrl}/api/ops/events?source=live&limit=${OPS_FEED_MAX_ITEMS}`;
         const payload = await fetchEndpointJSON({
           backendBaseUrl,
           endpointName: "Ops feed endpoint",

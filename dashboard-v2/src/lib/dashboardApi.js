@@ -18,11 +18,32 @@ export function resolveBackendBaseUrl() {
     return `${protocol}//${hostname}:8080`;
   }
 
-  if (hostname === "envirostation-dashboard.fly.dev") {
-    return "https://envirostation-api.fly.dev";
+  return origin;
+}
+
+export function resolveReadAPIKey() {
+  const env = import.meta.env.VITE_READ_API_KEY;
+  return typeof env === "string" ? env.trim() : "";
+}
+
+export function buildReadRequestOptions(signal, readAPIKey = resolveReadAPIKey()) {
+  const options = { signal };
+  if (readAPIKey) {
+    options.headers = { "X-Read-API-Key": readAPIKey };
+  }
+  return options;
+}
+
+export function buildReadStreamUrl(requestUrl, readAPIKey = resolveReadAPIKey()) {
+  if (!readAPIKey) {
+    return requestUrl;
   }
 
-  return origin;
+  const baseUrl =
+    typeof window === "undefined" ? "http://localhost" : window.location.origin;
+  const url = new URL(requestUrl, baseUrl);
+  url.searchParams.set("read_key", readAPIKey);
+  return url.toString();
 }
 
 export async function parseJSONResponse(response, endpointName, requestUrl, backendBaseUrl) {
@@ -62,7 +83,7 @@ export async function fetchEndpointJSON({
   unavailableMessage,
   warningLabel
 }) {
-  const response = await fetch(requestUrl, { signal });
+  const response = await fetch(requestUrl, buildReadRequestOptions(signal));
   const payload = await parseJSONResponse(
     response,
     endpointName,

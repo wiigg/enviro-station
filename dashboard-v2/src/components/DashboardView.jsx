@@ -1,3 +1,4 @@
+import { memo } from "react";
 import {
   CartesianGrid,
   Line,
@@ -8,20 +9,23 @@ import {
   YAxis
 } from "recharts";
 
-const AXIS_TICK_STYLE = { fill: "#5d6884", fontSize: 11 };
+const AXIS_TICK_STYLE = { fill: "#647184", fontSize: 11 };
 const TOOLTIP_CONTENT_STYLE = {
-  borderRadius: "12px",
-  border: "1px solid rgba(24, 35, 65, 0.12)",
-  background: "rgba(255,255,255,0.96)"
+  borderRadius: "8px",
+  border: "1px solid rgba(19, 28, 43, 0.12)",
+  background: "rgba(255,255,255,0.98)",
+  boxShadow: "0 12px 30px rgba(19, 28, 43, 0.12)"
 };
 
 const TREND_PANELS = [
   {
     title: "Particulate Trend",
-    subtitle: "PM2.5 over selected window",
+    subtitle: "PM2.5 peak-aware trend",
     ariaLabel: "Particulate trend chart",
     lineDataKey: "pm2",
     lineStroke: "#f27a3e",
+    averageDataKey: "pm2Average",
+    averageStroke: "#4f6278",
     tooltipName: "PM2.5",
     tooltipUnit: "ug/m3"
   },
@@ -31,11 +35,39 @@ const TREND_PANELS = [
     ariaLabel: "Comfort trend chart",
     lineDataKey: "temperature",
     lineStroke: "#1f8a78",
+    averageDataKey: "temperatureAverage",
+    averageStroke: "#4f6278",
     tooltipName: "Temperature",
     tooltipUnit: "C",
     useTemperatureDomain: true
   }
 ];
+
+const KPI_STATE_LABELS = {
+  alert: "Action",
+  warn: "Watch",
+  ok: "Good",
+  muted: "Waiting"
+};
+
+function dashboardSummary(kpis, connectionStatus) {
+  if (connectionStatus === "offline") {
+    return { label: "Offline", tone: "alert" };
+  }
+  if (connectionStatus === "degraded") {
+    return { label: "Reconnecting", tone: "warn" };
+  }
+  if (kpis.some((item) => item.state === "alert")) {
+    return { label: "Action needed", tone: "alert" };
+  }
+  if (kpis.some((item) => item.state === "warn")) {
+    return { label: "Watch", tone: "warn" };
+  }
+  if (connectionStatus === "waiting" || kpis.every((item) => item.state === "muted")) {
+    return { label: "Waiting", tone: "muted" };
+  }
+  return { label: "Stable", tone: "ok" };
+}
 
 function statusLabel(status) {
   if (status === "live") {
@@ -95,10 +127,10 @@ function insightSeverityClassName(severity) {
 
 function insightSeverityLabel(severity) {
   if (severity === "critical") {
-    return "Critical";
+    return "Action";
   }
   if (severity === "warn") {
-    return "Warn";
+    return "Watch";
   }
   return "Info";
 }
@@ -113,23 +145,29 @@ function insightKindLabel(kind) {
   return "Insight";
 }
 
-function StatusChip({ connectionStatus }) {
+const StatusChip = memo(function StatusChip({ connectionStatus }) {
   return (
     <span className={`chip chipStatus ${statusClassName(connectionStatus)}`}>
       {statusLabel(connectionStatus)}
     </span>
   );
-}
+});
 
-function WindowControls({ onSelectWindow, selectedWindowId, windowOptions }) {
+const WindowControls = memo(function WindowControls({
+  onSelectWindow,
+  selectedWindowId,
+  windowOptions
+}) {
   return (
-    <section className="card controls reveal">
-      <div className="controlGroup">
+    <section className="controls reveal" aria-label="Dashboard time range">
+      <div className="controlGroup" role="tablist" aria-label="Time range">
         {windowOptions.map((windowOption) => (
           <button
             key={windowOption.id}
-            className={`btn ${windowOption.id === selectedWindowId ? "btnActive" : ""}`}
+            className={`segmentButton ${windowOption.id === selectedWindowId ? "segmentActive" : ""}`}
             type="button"
+            role="tab"
+            aria-selected={windowOption.id === selectedWindowId}
             onClick={() => onSelectWindow(windowOption.id)}
           >
             {windowOption.label}
@@ -138,16 +176,18 @@ function WindowControls({ onSelectWindow, selectedWindowId, windowOptions }) {
       </div>
     </section>
   );
-}
+});
 
-function KpiGrid({ kpis }) {
+const KpiGrid = memo(function KpiGrid({ kpis }) {
   return (
     <section className="kpiGrid reveal">
       {kpis.map((item) => (
-        <article className="card kpi" key={item.label}>
+        <article className={`card kpi kpi-${item.state}`} key={item.label}>
           <div className="kpiHead">
             <span>{item.label}</span>
-            <span className={`dot ${item.state}`} />
+            <span className={`statePill state-${item.state}`}>
+              {KPI_STATE_LABELS[item.state] ?? item.state}
+            </span>
           </div>
           <p className="kpiValue">
             {item.value}
@@ -158,9 +198,9 @@ function KpiGrid({ kpis }) {
       ))}
     </section>
   );
-}
+});
 
-function TrendPanel({
+const TrendPanel = memo(function TrendPanel({
   title,
   subtitle,
   ariaLabel,
@@ -169,20 +209,34 @@ function TrendPanel({
   yAxisDomain,
   lineDataKey,
   lineStroke,
+  averageDataKey,
+  averageStroke,
   tooltipName,
   tooltipUnit
 }) {
   return (
     <article className="card panel">
       <div className="panelHead">
-        <h2>{title}</h2>
-        <span>{subtitle}</span>
+        <div className="panelTitle">
+          <h2>{title}</h2>
+          <span>{subtitle}</span>
+        </div>
+        <div className="chartLegend" aria-hidden="true">
+          <span>
+            <i style={{ backgroundColor: lineStroke }} />
+            Reading
+          </span>
+          <span>
+            <i className="averageLegend" style={{ backgroundColor: averageStroke }} />
+            Avg
+          </span>
+        </div>
       </div>
       {chartData.length ? (
         <div className="chart" role="img" aria-label={ariaLabel}>
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={chartData} margin={{ top: 8, right: 12, left: 0, bottom: 6 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(24, 35, 65, 0.12)" />
+            <LineChart data={chartData} margin={{ top: 8, right: 10, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="2 6" stroke="rgba(19, 28, 43, 0.1)" />
               <XAxis
                 dataKey="timestamp"
                 tickFormatter={axisTickFormatter}
@@ -200,14 +254,29 @@ function TrendPanel({
               />
               <Tooltip
                 labelFormatter={formatChartLabel}
-                formatter={(value) => [`${Number(value).toFixed(1)} ${tooltipUnit}`, tooltipName]}
+                formatter={(value, name) => [
+                  `${Number(value).toFixed(1)} ${tooltipUnit}`,
+                  name
+                ]}
                 contentStyle={TOOLTIP_CONTENT_STYLE}
               />
               <Line
-                type="monotone"
+                type="linear"
+                dataKey={averageDataKey}
+                name={`${tooltipName} avg`}
+                stroke={averageStroke}
+                strokeWidth={2}
+                strokeDasharray="5 5"
+                dot={false}
+                connectNulls
+                isAnimationActive={false}
+              />
+              <Line
+                type="linear"
                 dataKey={lineDataKey}
+                name={tooltipName}
                 stroke={lineStroke}
-                strokeWidth={3}
+                strokeWidth={2.5}
                 dot={false}
                 isAnimationActive={false}
               />
@@ -219,9 +288,9 @@ function TrendPanel({
       )}
     </article>
   );
-}
+});
 
-function InsightsCard({
+const InsightsCard = memo(function InsightsCard({
   insightSource,
   insights,
   insightsError,
@@ -263,14 +332,14 @@ function InsightsCard({
       )}
     </aside>
   );
-}
+});
 
-function OpsFeedCard({ feedError, feedItems, isLoadingFeed }) {
+const OpsFeedCard = memo(function OpsFeedCard({ feedError, feedItems, isLoadingFeed }) {
   return (
     <aside className="card panel feed">
       <div className="panelHead">
         <h2>Ops Feed</h2>
-        <span>Persisted backend events</span>
+        <span>Recent backend events</span>
       </div>
       {isLoadingFeed ? (
         <p className="emptyState">Loading operations log...</p>
@@ -293,7 +362,7 @@ function OpsFeedCard({ feedError, feedItems, isLoadingFeed }) {
       )}
     </aside>
   );
-}
+});
 
 export default function DashboardView({
   axisTickFormatter,
@@ -313,19 +382,29 @@ export default function DashboardView({
   temperatureDomain,
   windowOptions
 }) {
+  const summary = dashboardSummary(kpis, connectionStatus);
+
   return (
     <div className="shell">
-      <div className="background" aria-hidden="true" />
       <main className="layout">
-        <header className="card topbar reveal">
-          <div>
+        <header className="topbar reveal">
+          <div className="titleBlock">
             <p className="eyebrow">Enviro Station</p>
-            <h1>Air Quality Control Deck</h1>
+            <h1>Air quality dashboard</h1>
           </div>
           <div className="topbarMeta">
             <StatusChip connectionStatus={connectionStatus} />
+            <span className="chip">{selectedWindow.label}</span>
           </div>
         </header>
+
+        <section className={`overviewStrip overview-${summary.tone} reveal`}>
+          <div>
+            <p className="overviewLabel">Current state</p>
+            <p className="overviewValue">{summary.label}</p>
+          </div>
+          {lastError ? <p className="overviewWarning">{lastError}</p> : null}
+        </section>
 
         <WindowControls
           onSelectWindow={onSelectWindow}
@@ -335,22 +414,26 @@ export default function DashboardView({
 
         <KpiGrid kpis={kpis} />
 
-        <section className="dataGrid reveal">
-          {TREND_PANELS.map((panel) => (
-            <TrendPanel
-              key={panel.lineDataKey}
-              title={panel.title}
-              subtitle={panel.subtitle}
-              ariaLabel={panel.ariaLabel}
-              chartData={chartData}
-              axisTickFormatter={axisTickFormatter}
-              yAxisDomain={panel.useTemperatureDomain ? temperatureDomain : undefined}
-              lineDataKey={panel.lineDataKey}
-              lineStroke={panel.lineStroke}
-              tooltipName={panel.tooltipName}
-              tooltipUnit={panel.tooltipUnit}
-            />
-          ))}
+        <section className="dashboardGrid reveal">
+          <div className="trendStack">
+            {TREND_PANELS.map((panel) => (
+              <TrendPanel
+                key={panel.lineDataKey}
+                title={panel.title}
+                subtitle={panel.subtitle}
+                ariaLabel={panel.ariaLabel}
+                chartData={chartData}
+                axisTickFormatter={axisTickFormatter}
+                yAxisDomain={panel.useTemperatureDomain ? temperatureDomain : undefined}
+                lineDataKey={panel.lineDataKey}
+                lineStroke={panel.lineStroke}
+                averageDataKey={panel.averageDataKey}
+                averageStroke={panel.averageStroke}
+                tooltipName={panel.tooltipName}
+                tooltipUnit={panel.tooltipUnit}
+              />
+            ))}
+          </div>
 
           <div className="sideStack">
             <InsightsCard

@@ -11,6 +11,12 @@ const NUMERIC_FIELDS = [
   "pm10"
 ];
 
+const OPTIONAL_NUMERIC_FIELDS = {
+  pm1_max: "pm1Max",
+  pm2_max: "pm2Max",
+  pm10_max: "pm10Max"
+};
+
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
@@ -32,6 +38,18 @@ export function normalizeReading(raw) {
       return null;
     }
     output[field] = field === "timestamp" ? normalizeTimestamp(parsed) : parsed;
+  }
+  for (const [rawField, outputField] of Object.entries(OPTIONAL_NUMERIC_FIELDS)) {
+    if (raw[rawField] === undefined || raw[rawField] === null) {
+      continue;
+    }
+    const parsed = Number(raw[rawField]);
+    if (Number.isFinite(parsed)) {
+      output[outputField] = parsed;
+    }
+  }
+  if (typeof raw.device_id === "string" && raw.device_id.trim()) {
+    output.deviceId = raw.device_id.trim();
   }
 
   return output;
@@ -83,14 +101,14 @@ export function buildKpis(readings, windowId = "live") {
       value: latest.temperature.toFixed(1),
       unit: "C",
       trend: metricTrend(readings, samples, latest, "temperature", "C", 1, windowId),
-      state: "ok"
+      state: severityForTemperature(latest.temperature)
     },
     {
       label: "Humidity",
       value: latest.humidity.toFixed(0),
       unit: "%",
       trend: metricTrend(readings, samples, latest, "humidity", "%", 0, windowId),
-      state: "ok"
+      state: severityForHumidity(latest.humidity)
     }
   ];
 }
@@ -232,23 +250,43 @@ function describeDelta(delta, unit, decimals, referenceLabel) {
 }
 
 function severityForPM25(value) {
-  if (value <= 5) {
-    return "ok";
+  if (value > 15) {
+    return "alert";
   }
-  if (value <= 15) {
+  if (value >= 8) {
     return "warn";
   }
-  return "alert";
+  return "ok";
 }
 
 function severityForPM10(value) {
-  if (value <= 15) {
-    return "ok";
+  if (value > 45) {
+    return "alert";
   }
-  if (value <= 45) {
+  if (value >= 30) {
     return "warn";
   }
-  return "alert";
+  return "ok";
+}
+
+function severityForTemperature(value) {
+  if (value <= 15 || value >= 30) {
+    return "alert";
+  }
+  if (value <= 18 || value >= 26) {
+    return "warn";
+  }
+  return "ok";
+}
+
+function severityForHumidity(value) {
+  if (value < 25 || value >= 70) {
+    return "alert";
+  }
+  if (value < 40 || value >= 60) {
+    return "warn";
+  }
+  return "ok";
 }
 
 function normalizeTimestamp(timestamp) {

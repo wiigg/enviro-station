@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { normalizeReading, normalizeReadings } from "../lib/readings";
-import { parseJSONResponse } from "../lib/dashboardApi";
 import {
+  buildReadRequestOptions,
+  buildReadStreamUrl,
+  parseJSONResponse
+} from "../lib/dashboardApi";
+import {
+  DASHBOARD_DEVICE_ID,
   LIVE_SOURCE_WINDOW_IDS,
   PREFETCH_WINDOW_IDS,
   STREAM_WINDOW_IDS,
@@ -27,7 +32,7 @@ function useReadingsHistoryWindows({
     async (targetWindowId, signal) => {
       const targetWindow = WINDOW_OPTIONS_BY_ID[targetWindowId];
       const historyUrl = buildHistoryUrl(backendBaseUrl, targetWindow);
-      const response = await fetch(historyUrl, { signal });
+      const response = await fetch(historyUrl, buildReadRequestOptions(signal));
       const payload = await parseJSONResponse(
         response,
         `${targetWindow.label} history endpoint`,
@@ -257,13 +262,19 @@ function useReadingsStreamConnection({
 
       setConnectionStatus("connecting");
       const streamUrl = new URL(`${backendBaseUrl}/api/stream`);
-      eventSource = new EventSource(streamUrl.toString());
+      if (DASHBOARD_DEVICE_ID) {
+        streamUrl.searchParams.set("device_id", DASHBOARD_DEVICE_ID);
+      }
+      eventSource = new EventSource(buildReadStreamUrl(streamUrl.toString()));
 
       const handleReading = (event) => {
         try {
           const parsed = JSON.parse(event.data);
           const reading = normalizeReading(parsed);
           if (!reading) {
+            return;
+          }
+          if (DASHBOARD_DEVICE_ID && reading.deviceId !== DASHBOARD_DEVICE_ID) {
             return;
           }
 

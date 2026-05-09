@@ -3,13 +3,61 @@ import { buildKpis } from "../lib/readings";
 import { resolveBackendBaseUrl } from "../lib/dashboardApi";
 import { WINDOW_OPTIONS } from "../lib/dashboardConfig";
 import {
+  buildTrendChartData,
   computeTemperatureDomain,
   filterVisibleReadings,
-  downsampleReadings
+  downsampleReadings,
+  normalizeInsightTextForSeverity
 } from "../lib/dashboardTransforms";
 import { useInsightsData } from "./useInsightsData";
 import { useOpsFeedData } from "./useOpsFeedData";
 import { useReadingsData } from "./useReadingsData";
+
+function strongestState(states) {
+  if (states.includes("alert")) {
+    return "alert";
+  }
+  if (states.includes("warn")) {
+    return "warn";
+  }
+  if (states.includes("ok")) {
+    return "ok";
+  }
+  return "muted";
+}
+
+function insightTopicState(insight, kpis) {
+  if (insight.topic === "humidity") {
+    return kpis.find((item) => item.label === "Humidity")?.state ?? "muted";
+  }
+  if (insight.topic === "temperature") {
+    return kpis.find((item) => item.label === "Temp")?.state ?? "muted";
+  }
+  if (insight.topic === "air_quality") {
+    return strongestState(
+      kpis
+        .filter((item) => item.label === "PM2.5" || item.label === "PM10")
+        .map((item) => item.state)
+    );
+  }
+  return "";
+}
+
+function alignInsightSeverity(insight, kpis) {
+  const topicState = insightTopicState(insight, kpis);
+  if (topicState === "alert" && insight.severity !== "critical") {
+    return { ...insight, kind: "alert", severity: "critical" };
+  }
+  if (topicState === "warn" && insight.severity === "critical") {
+    return {
+      ...insight,
+      title: normalizeInsightTextForSeverity(insight.title, "warn"),
+      message: normalizeInsightTextForSeverity(insight.message, "warn"),
+      severity: "warn"
+    };
+  }
+  return insight;
+}
 
 export function useDashboardData() {
   const backendBaseUrl = useMemo(() => resolveBackendBaseUrl(), []);
@@ -42,14 +90,19 @@ export function useDashboardData() {
 
   const kpis = useMemo(() => buildKpis(readings, windowId), [readings, windowId]);
 
+  const alignedInsights = useMemo(
+    () => insights.map((insight) => alignInsightSeverity(insight, kpis)),
+    [insights, kpis]
+  );
+
   const chartData = useMemo(
     () =>
-      chartReadings.map((reading) => ({
-        timestamp: reading.timestamp,
-        pm2: reading.pm2,
-        temperature: reading.temperature
-      })),
-    [chartReadings]
+      buildTrendChartData(
+        visibleReadings,
+        chartReadings,
+        selectedWindow.trendAverageWindowMs
+      ),
+    [chartReadings, selectedWindow.trendAverageWindowMs, visibleReadings]
   );
 
   const temperatureDomain = useMemo(
@@ -80,7 +133,7 @@ export function useDashboardData() {
     feedError,
     feedItems,
     insightSource,
-    insights,
+    insights: alignedInsights,
     insightsError,
     isLoadingFeed,
     isLoadingInsights,

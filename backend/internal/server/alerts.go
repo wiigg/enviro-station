@@ -37,6 +37,15 @@ type AlertThresholds struct {
 	TemperatureDeltaTrigger  float64
 }
 
+const (
+	criticalPM2Threshold             = 15.0
+	criticalPM10Threshold            = 45.0
+	criticalHumidityLowThreshold     = 25.0
+	criticalHumidityHighThreshold    = 70.0
+	criticalTemperatureLowThreshold  = 15.0
+	criticalTemperatureHighThreshold = 30.0
+)
+
 func defaultAlertThresholds() AlertThresholds {
 	return AlertThresholds{
 		PM2Threshold:             8.0,
@@ -291,7 +300,9 @@ func systemPrompt(maxAlerts int, thresholds AlertThresholds) string {
 			"For humidity discuss humidity only, treating values below %.0f%% or above %.0f%% and 10 minute moves of %.1f points as noteworthy. "+
 			"For temperature discuss temperature only, treating values below %.1fC or above %.1fC and 10 minute moves of %.1fC as noteworthy. "+
 			"Treat both worsening and improvement as noteworthy when the change is material. "+
-			"Use severities critical, warn, or info. "+
+			"Use critical only for PM2.5 above %.1f ug/m3, PM10 above %.1f ug/m3, humidity below %.0f%% or at/above %.0f%%, or temperature at/below %.1fC or at/above %.1fC; otherwise use warn for noteworthy non-critical conditions. "+
+			"Use info only for neutral observations or material improvements. "+
+			"Do not use severity labels such as critical, warn, watch, or action in titles or messages; the UI displays severity separately. "+
 			"Keep title under 60 characters and message under 180 characters.",
 		maxAlerts,
 		strings.Join(topics, ", "),
@@ -305,6 +316,12 @@ func systemPrompt(maxAlerts int, thresholds AlertThresholds) string {
 		thresholds.TemperatureLowThreshold,
 		thresholds.TemperatureHighThreshold,
 		thresholds.TemperatureDeltaTrigger,
+		criticalPM2Threshold,
+		criticalPM10Threshold,
+		criticalHumidityLowThreshold,
+		criticalHumidityHighThreshold,
+		criticalTemperatureLowThreshold,
+		criticalTemperatureHighThreshold,
 	)
 }
 
@@ -430,8 +447,8 @@ func normalizeAlerts(
 			Topic:    topic,
 			Kind:     kind,
 			Severity: severity,
-			Title:    trimToLength(title, 60),
-			Message:  trimToLength(message, 180),
+			Title:    trimToLength(normalizeAlertMessageForSeverity(title, severity), 60),
+			Message:  trimToLength(normalizeAlertMessageForSeverity(message, severity), 180),
 		}
 		if topic == "general" {
 			if generalAlert == nil {
@@ -536,25 +553,70 @@ func normalizeAlertSeverity(
 	summary alertSummary,
 	thresholds AlertThresholds,
 ) string {
+	if topicHasCriticalValue(topic, summary) {
+		return bumpAlertSeverity(severity, "critical")
+	}
+
 	switch topic {
 	case "air_quality":
 		if summary.Latest.PM2 >= thresholds.PM2Threshold ||
 			summary.Latest.PM10 >= thresholds.PM10Threshold {
-			return bumpAlertSeverity(severity, "warn")
+			return "warn"
 		}
 	case "humidity":
 		if summary.Latest.Humidity < thresholds.HumidityLowThreshold ||
 			summary.Latest.Humidity >= thresholds.HumidityHighThreshold {
-			return bumpAlertSeverity(severity, "warn")
+			return "warn"
 		}
 	case "temperature":
 		if summary.Latest.Temperature <= thresholds.TemperatureLowThreshold ||
 			summary.Latest.Temperature >= thresholds.TemperatureHighThreshold {
-			return bumpAlertSeverity(severity, "warn")
+			return "warn"
 		}
 	}
 
+	if severity == "critical" {
+		return "warn"
+	}
 	return severity
+}
+
+func topicHasCriticalValue(topic string, summary alertSummary) bool {
+	switch topic {
+	case "air_quality":
+		return summary.Latest.PM2 > criticalPM2Threshold ||
+			summary.Latest.PM10 > criticalPM10Threshold
+	case "humidity":
+		return summary.Latest.Humidity < criticalHumidityLowThreshold ||
+			summary.Latest.Humidity >= criticalHumidityHighThreshold
+	case "temperature":
+		return summary.Latest.Temperature <= criticalTemperatureLowThreshold ||
+			summary.Latest.Temperature >= criticalTemperatureHighThreshold
+	default:
+		return false
+	}
+}
+
+func normalizeAlertMessageForSeverity(message string, severity string) string {
+	if severity == "critical" {
+		return message
+	}
+	return strings.NewReplacer(
+		"Critical threshold", "Threshold",
+		"critical threshold", "threshold",
+		"Critical range", "Noteworthy range",
+		"critical range", "noteworthy range",
+		"Critically", "Very",
+		"critically", "very",
+		"Critical", "Watch",
+		"critical", "watch",
+		"Action recommended", "Watch",
+		"action recommended", "watch",
+		"Action required", "Watch",
+		"action required", "watch",
+		"Take action", "Check",
+		"take action", "check",
+	).Replace(message)
 }
 
 func bumpAlertSeverity(current string, target string) string {

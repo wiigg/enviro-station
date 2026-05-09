@@ -61,3 +61,59 @@ func TestFallbackStableAlertProducesInsight(t *testing.T) {
 		t.Fatalf("expected non-empty message")
 	}
 }
+
+func TestNormalizeAlertSeverityUsesDashboardThresholds(t *testing.T) {
+	thresholds := defaultAlertThresholds()
+
+	watchHumidity := alertSummary{
+		Latest: metricSnapshot{
+			Humidity: 25.4,
+		},
+	}
+	if got := normalizeAlertSeverity("humidity", "critical", watchHumidity, thresholds); got != "warn" {
+		t.Fatalf("expected humidity critical to normalize to warn, got %q", got)
+	}
+
+	actionHumidity := alertSummary{
+		Latest: metricSnapshot{
+			Humidity: 24.9,
+		},
+	}
+	if got := normalizeAlertSeverity("humidity", "warn", actionHumidity, thresholds); got != "critical" {
+		t.Fatalf("expected action humidity to normalize to critical, got %q", got)
+	}
+
+	watchTemperature := alertSummary{
+		Latest: metricSnapshot{
+			Temperature: 29.2,
+		},
+	}
+	if got := normalizeAlertSeverity("temperature", "critical", watchTemperature, thresholds); got != "warn" {
+		t.Fatalf("expected temperature critical to normalize to warn, got %q", got)
+	}
+
+	actionPM := alertSummary{
+		Latest: metricSnapshot{
+			PM2: 16.0,
+		},
+	}
+	if got := normalizeAlertSeverity("air_quality", "warn", actionPM, thresholds); got != "critical" {
+		t.Fatalf("expected action PM to normalize to critical, got %q", got)
+	}
+}
+
+func TestNormalizeAlertMessageRemovesCriticalCopyForWatchSeverity(t *testing.T) {
+	message := "Critically dry air reached a critical range and critical threshold. Action recommended."
+	got := normalizeAlertMessageForSeverity(message, "warn")
+	if strings.Contains(strings.ToLower(got), "critical") {
+		t.Fatalf("expected critical copy to be removed, got %q", got)
+	}
+	if strings.Contains(strings.ToLower(got), "action") {
+		t.Fatalf("expected action copy to be removed, got %q", got)
+	}
+
+	critical := normalizeAlertMessageForSeverity(message, "critical")
+	if critical != message {
+		t.Fatalf("expected critical message to remain unchanged, got %q", critical)
+	}
+}
