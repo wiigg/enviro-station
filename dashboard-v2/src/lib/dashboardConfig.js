@@ -54,7 +54,7 @@ export const WINDOW_OPTIONS_BY_ID = Object.fromEntries(
 
 export const PREFETCH_WINDOW_IDS = ["1h"];
 export const STREAM_WINDOW_IDS = ["live", "1h"];
-export const LIVE_SOURCE_WINDOW_IDS = new Set(["live", "1h"]);
+export const LIVE_SOURCE_WINDOW_IDS = new Set(["live"]);
 
 export const INSIGHT_POLL_INTERVAL_MS = 5 * MINUTE_MS;
 export const INSIGHT_MAX_ITEMS = 3;

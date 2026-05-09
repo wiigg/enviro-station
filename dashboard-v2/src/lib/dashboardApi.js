@@ -27,7 +27,7 @@ export function resolveReadAPIKey() {
 }
 
 export function buildReadRequestOptions(signal, readAPIKey = resolveReadAPIKey()) {
-  const options = { signal };
+  const options = { signal, cache: "no-store" };
   if (readAPIKey) {
     options.headers = { "X-Read-API-Key": readAPIKey };
   }

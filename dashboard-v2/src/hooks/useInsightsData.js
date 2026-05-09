@@ -1,30 +1,19 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import { fetchEndpointJSON } from "../lib/dashboardApi";
 import {
   INSIGHT_MAX_ITEMS,
   INSIGHT_POLL_INTERVAL_MS
 } from "../lib/dashboardConfig";
 import {
-  readInsightsCache,
-  writeInsightsCache
-} from "../lib/dashboardInsightsCache";
-import {
   normalizeInsight
 } from "../lib/dashboardTransforms";
 import { useSelfSchedulingPoll } from "./useSelfSchedulingPoll";
 
 export function useInsightsData(backendBaseUrl) {
-  const initialInsightsCache = useMemo(
-    () => readInsightsCache(backendBaseUrl),
-    [backendBaseUrl]
-  );
-
-  const [insights, setInsights] = useState(initialInsightsCache?.insights ?? []);
+  const [insights, setInsights] = useState([]);
   const [insightsError, setInsightsError] = useState("");
-  const [isLoadingInsights, setIsLoadingInsights] = useState(
-    (initialInsightsCache?.insights?.length ?? 0) === 0
-  );
-  const [insightSource, setInsightSource] = useState(initialInsightsCache?.source ?? "openai");
+  const [isLoadingInsights, setIsLoadingInsights] = useState(true);
+  const [insightSource, setInsightSource] = useState("openai");
 
   const pollInsights = useCallback(
     async ({ signal, isClosed }) => {
@@ -53,7 +42,6 @@ export function useInsightsData(backendBaseUrl) {
         setInsights(nextInsights);
         setInsightSource(nextSource);
         setInsightsError("");
-        writeInsightsCache(backendBaseUrl, nextSource, nextInsights);
       } catch (error) {
         if (isClosed() || signal.aborted) {
           return;
