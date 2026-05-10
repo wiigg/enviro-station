@@ -1,5 +1,6 @@
 # Copy to backend/fly.toml and change app/region before deploying.
 # This template keeps one small Machine warm so live telemetry and SSE stay reliable.
+# Keep Fly capped at one Machine with: fly scale count 1 -a <app> --max-per-region 1
 
 app = "your-envirostation-api"
 primary_region = "fra"

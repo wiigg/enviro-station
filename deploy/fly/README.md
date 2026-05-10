@@ -3,12 +3,16 @@
 These templates keep the live dashboard reliable while still using small
 Machines and lazy database access:
 
-- one Machine per app
+- one Machine per app; this is the effective scale-out cap
 - `shared-cpu-1x` with `256mb` memory
 - `auto_stop_machines = "off"`
 - `min_machines_running = 1`
+- deploys use `--ha=false` so Fly does not add spare Machines
 - lazy backend database connection so live/status cold starts do not wake Neon
 - dashboard same-origin proxy so `READ_API_KEY` is not built into browser JavaScript
+
+Fly does not use a `max_machines_running` setting in these app configs. The
+Machine count is the cap, so keep it at `1` and verify it after deploys.
 
 ## Files
 
@@ -37,8 +41,9 @@ Deploy and force a single Machine:
 
 ```bash
 cd backend
-fly deploy -a your-envirostation-api --config fly.toml --remote-only
-fly scale count 1 -a your-envirostation-api
+fly deploy -a your-envirostation-api --config fly.toml --remote-only --ha=false
+fly scale count 1 -a your-envirostation-api --max-per-region 1 --yes
+fly scale show -a your-envirostation-api
 cd ..
 ```
 
@@ -50,8 +55,9 @@ requests, including SSE, without exposing it in the built JavaScript bundle.
 ```bash
 fly secrets set -a your-envirostation-dashboard READ_API_KEY='replace-me'
 cd dashboard-v2
-fly deploy -a your-envirostation-dashboard --config fly.toml --remote-only
-fly scale count 1 -a your-envirostation-dashboard
+fly deploy -a your-envirostation-dashboard --config fly.toml --remote-only --ha=false
+fly scale count 1 -a your-envirostation-dashboard --max-per-region 1 --yes
+fly scale show -a your-envirostation-dashboard
 cd ..
 ```
 

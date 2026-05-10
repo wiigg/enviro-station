@@ -73,6 +73,7 @@ uv run python main.py
 ## Fly Deployment
 
 Fly templates live in `deploy/fly/`. They use one `shared-cpu-1x` 256MB Machine
-per app, keep one Machine warm for reliable live telemetry and SSE, and keep the
-backend database connection lazy so live/status traffic does not touch Neon until
-durable history or batch ingest needs Postgres.
+per app, keep one Machine warm for reliable live telemetry and SSE, and use that
+single Machine count as the scale-out cap. Deploy with `--ha=false`, keep
+`fly scale count 1`, and keep the backend database connection lazy so live/status
+traffic does not touch Neon until durable history or batch ingest needs Postgres.

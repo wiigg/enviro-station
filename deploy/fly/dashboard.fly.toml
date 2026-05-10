@@ -1,5 +1,6 @@
 # Copy to dashboard-v2/fly.toml and change app/region before deploying.
 # Keep the dashboard same-origin and let Nginx proxy /api/* to the API.
+# Keep Fly capped at one Machine with: fly scale count 1 -a <app> --max-per-region 1
 
 app = "your-envirostation-dashboard"
 primary_region = "fra"

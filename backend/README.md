@@ -98,8 +98,8 @@ go run ./cmd/server
 ## Fly
 
 Use `deploy/fly/backend.fly.toml` as the Fly template. It keeps one small Machine
-warm for reliable live telemetry, reduces Neon connection pressure, and sets
-`DATABASE_CONNECT_ON_START=false`.
+warm for reliable live telemetry, uses `fly scale count 1` as the scale-out cap,
+reduces Neon connection pressure, and sets `DATABASE_CONNECT_ON_START=false`.
 
 ## Data retention
 
