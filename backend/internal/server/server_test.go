@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -467,6 +468,39 @@ func TestHandleLiveStatusReportsStreamSubscribers(t *testing.T) {
 	}
 	if payload.SubscriberCount != 1 {
 		t.Fatalf("expected one subscriber, got %d", payload.SubscriberCount)
+	}
+}
+
+func TestHandleStreamFlushesInitialComment(t *testing.T) {
+	store := &fakeStore{}
+	api := NewAPI(store, "secret")
+	testServer := httptest.NewServer(api.Handler())
+	defer testServer.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, testServer.URL+"/api/stream", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+
+	response, err := testServer.Client().Do(request)
+	if err != nil {
+		t.Fatalf("stream request: %v", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, response.StatusCode)
+	}
+
+	buffer := make([]byte, len(": connected\n\n"))
+	if _, err := io.ReadFull(response.Body, buffer); err != nil {
+		t.Fatalf("read initial stream comment: %v", err)
+	}
+	if string(buffer) != ": connected\n\n" {
+		t.Fatalf("expected initial stream comment, got %q", string(buffer))
 	}
 }
 

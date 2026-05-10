@@ -527,6 +527,11 @@ func (api *API) handleStream(response http.ResponseWriter, request *http.Request
 	channel, unsubscribe := api.stream.subscribe(deviceID)
 	defer unsubscribe()
 
+	if _, err := io.WriteString(response, ": connected\n\n"); err != nil {
+		return
+	}
+	flusher.Flush()
+
 	heartbeatTicker := time.NewTicker(25 * time.Second)
 	defer heartbeatTicker.Stop()
 
