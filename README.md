@@ -72,7 +72,7 @@ uv run python main.py
 
 ## Fly Deployment
 
-Cost-minimized Fly templates live in `deploy/fly/`.
-They use one `shared-cpu-1x` 256MB Machine per app, `min_machines_running=0`,
-autostop, and lazy backend database connection so live/status cold starts do not
-touch Neon until durable history or batch ingest needs Postgres.
+Fly templates live in `deploy/fly/`. They use one `shared-cpu-1x` 256MB Machine
+per app, keep one Machine warm for reliable live telemetry and SSE, and keep the
+backend database connection lazy so live/status traffic does not touch Neon until
+durable history or batch ingest needs Postgres.

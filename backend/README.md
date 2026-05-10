@@ -97,17 +97,17 @@ go run ./cmd/server
 
 ## Fly
 
-Use `deploy/fly/backend.fly.toml` as the cost-minimized Fly template. It keeps
-`min_machines_running=0`, uses the smallest shared Machine size, reduces Neon
-connection pressure, and sets `DATABASE_CONNECT_ON_START=false`.
+Use `deploy/fly/backend.fly.toml` as the Fly template. It keeps one small Machine
+warm for reliable live telemetry, reduces Neon connection pressure, and sets
+`DATABASE_CONNECT_ON_START=false`.
 
 ## Data retention
 
 Raw readings retention is managed automatically by the backend process.
 By default, readings older than 14 days are deleted in batches every 24 hours.
-For scale-to-zero Fly deployments, set `DATABASE_CONNECT_ON_START=false` and
-`RETENTION_RUN_ON_START=false`; retention then runs only if the Machine remains
-up for the configured interval after a durable database access.
+With `DATABASE_CONNECT_ON_START=false` and `RETENTION_RUN_ON_START=false`,
+retention runs only after the process remains up for the configured interval
+following a durable database access.
 
 ## Live vs durable ingestion
 

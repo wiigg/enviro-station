@@ -1,11 +1,12 @@
-# Fly.io Cost-Minimized Deployment
+# Fly.io Deployment
 
-These templates are tuned for minimum idle spend:
+These templates keep the live dashboard reliable while still using small
+Machines and lazy database access:
 
 - one Machine per app
 - `shared-cpu-1x` with `256mb` memory
-- `auto_stop_machines = "stop"`
-- `min_machines_running = 0`
+- `auto_stop_machines = "off"`
+- `min_machines_running = 1`
 - lazy backend database connection so live/status cold starts do not wake Neon
 - dashboard same-origin proxy so `READ_API_KEY` is not built into browser JavaScript
 
@@ -56,7 +57,7 @@ cd ..
 
 ## Device Settings
 
-For lowest Fly/Neon idle cost, keep:
+For lower Neon write volume while keeping the dashboard responsive, keep:
 
 ```dotenv
 DEVICE_LIVE_REQUIRE_SUBSCRIBER=true
@@ -66,5 +67,5 @@ DEVICE_LIVE_STATUS_IDLE_MAX_SECONDS=900
 DEVICE_FLUSH_INTERVAL_SECONDS=1800
 ```
 
-Increasing `DEVICE_LIVE_STATUS_IDLE_MAX_SECONDS` reduces idle API wakeups further
+Increasing `DEVICE_LIVE_STATUS_IDLE_MAX_SECONDS` reduces idle API traffic further
 at the cost of taking longer for the device to discover a newly opened dashboard.
