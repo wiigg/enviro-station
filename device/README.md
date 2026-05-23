@@ -13,7 +13,7 @@ and flushes durable batches to Postgres on a timer.
 - `DEVICE_QUEUE_FILE` (default: `pending_readings.json`)
 - `DEVICE_READ_INTERVAL_SECONDS` (default: `1`)
 - `DEVICE_BATCH_SIZE` (default: `1000`)
-- `DEVICE_FLUSH_INTERVAL_SECONDS` (default: `1800`)
+- `DEVICE_FLUSH_INTERVAL_SECONDS` (default: `60`)
 - `DEVICE_LIVE_INTERVAL_SECONDS` (default: `1`; set `0` to disable live posts)
 - `DEVICE_LIVE_REQUIRE_SUBSCRIBER` (default: `true`; only live-post when a dashboard stream is connected)
 - `DEVICE_LIVE_STATUS_INTERVAL_SECONDS` (default: `10`; active/minimum subscriber check interval)
@@ -45,8 +45,10 @@ uv run python main.py
 ```
 
 `main.py` loads configuration from `.env`.
-Each reading is queued locally. Live updates are rate-limited separately and,
-by default, are only posted while a dashboard stream is connected.
+Each reading is queued locally. Durable writes flush every 60 seconds by default
+so newly opened dashboards do not wait long for recent persisted history. Live
+updates are rate-limited separately and, by default, are only posted while a
+dashboard stream is connected.
 When no dashboard is connected, subscriber checks back off exponentially up to
 `DEVICE_LIVE_STATUS_IDLE_MAX_SECONDS` so Fly can stop between idle wakeups.
 When a dashboard stream is detected, live posts use `DEVICE_LIVE_INTERVAL_SECONDS`

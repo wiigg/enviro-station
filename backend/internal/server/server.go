@@ -721,7 +721,9 @@ func (api *API) clientIP(request *http.Request) string {
 }
 
 func (api *API) publishLive(reading SensorReading) {
-	api.live.add(reading)
+	if !api.live.addIfNewer(reading) {
+		return
+	}
 	api.stream.publish(reading)
 }
 
@@ -851,6 +853,9 @@ func (api *API) persistOpsEvent(kind string, title string, detail string, timest
 		defer cancel()
 
 		if err := api.opsEventStore.AddOpsEvent(ctx, event); err != nil {
+			if errors.Is(err, ErrStoreUnavailable) {
+				return
+			}
 			log.Printf("ops event persist failed kind=%s: %v", kind, err)
 		}
 	}()

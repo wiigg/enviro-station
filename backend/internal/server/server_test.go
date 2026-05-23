@@ -684,6 +684,75 @@ func TestNewAPIDoesNotConnectLazyStoreAtStartup(t *testing.T) {
 	}
 }
 
+func TestLiveTelemetryDoesNotConnectLazyStoreForOpsEvents(t *testing.T) {
+	runtimeStore := NewRuntimeStore(nil)
+	connectMu := sync.Mutex{}
+	connectCalls := 0
+	runtimeStore.SetConnector(func(_ context.Context) (Store, error) {
+		connectMu.Lock()
+		defer connectMu.Unlock()
+		connectCalls++
+		return &fakeOpsStore{fakeStore: &fakeStore{}}, nil
+	})
+	api := NewAPI(runtimeStore, "secret")
+	handler := api.Handler()
+
+	request := httptest.NewRequest(http.MethodPost, "/api/live", bytes.NewBufferString(`{
+		"timestamp":"1738886400",
+		"temperature":"22.4",
+		"pressure":"101305",
+		"humidity":"40.1",
+		"oxidised":"1.2",
+		"reduced":"1.1",
+		"nh3":"0.7",
+		"pm1":"2",
+		"pm2":"3",
+		"pm10":"4"
+	}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-API-Key", "secret")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("expected status %d, got %d", http.StatusAccepted, response.Code)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	connectMu.Lock()
+	gotConnectCalls := connectCalls
+	connectMu.Unlock()
+	if gotConnectCalls != 0 {
+		t.Fatalf("expected live telemetry not to connect lazy store, got %d calls", gotConnectCalls)
+	}
+}
+
+func TestInsightsStartupDoesNotConnectLazyStore(t *testing.T) {
+	runtimeStore := NewRuntimeStore(nil)
+	connectMu := sync.Mutex{}
+	connectCalls := 0
+	runtimeStore.SetConnector(func(_ context.Context) (Store, error) {
+		connectMu.Lock()
+		defer connectMu.Unlock()
+		connectCalls++
+		return &fakeStore{}, nil
+	})
+
+	analyzer := &fakeAlertAnalyzer{}
+	_ = NewAPI(runtimeStore, "secret", WithAlertAnalyzer(analyzer))
+
+	time.Sleep(50 * time.Millisecond)
+	connectMu.Lock()
+	gotConnectCalls := connectCalls
+	connectMu.Unlock()
+	if gotConnectCalls != 0 {
+		t.Fatalf("expected insights startup not to connect lazy store, got %d calls", gotConnectCalls)
+	}
+	if analyzer.calls != 0 {
+		t.Fatalf("expected no analysis without live or durable readings, got %d calls", analyzer.calls)
+	}
+}
+
 func TestHandleReadingsReturnsOKWithoutReadKey(t *testing.T) {
 	store := &fakeStore{}
 	api := NewAPI(store, "secret")

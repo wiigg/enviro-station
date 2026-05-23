@@ -17,7 +17,7 @@ class BackendTransmitter:
         batch_size=1000,
         timeout_seconds=5,
         max_pending=5000,
-        flush_interval_seconds=1800,
+        flush_interval_seconds=60,
         live_interval_seconds=1,
         live_require_subscriber=True,
         live_status_interval_seconds=10,

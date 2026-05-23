@@ -195,6 +195,9 @@ func (scheduler *InsightsScheduler) loadSnapshotFromStore() {
 
 	snapshot, ok, err := scheduler.snapshotStore.LatestInsightsSnapshot(loadCtx)
 	if err != nil {
+		if errors.Is(err, ErrStoreUnavailable) {
+			return
+		}
 		log.Printf("insights snapshot load failed: %v", err)
 		return
 	}
@@ -421,6 +424,9 @@ func (scheduler *InsightsScheduler) recompute(trigger string) {
 
 	readings, analysisSource, err := scheduler.analysisReadings(ctx, trigger)
 	if err != nil {
+		if errors.Is(err, ErrStoreUnavailable) {
+			return
+		}
 		log.Printf("insights recompute failed to load readings: %v", err)
 		return
 	}
@@ -480,6 +486,12 @@ func (scheduler *InsightsScheduler) analysisReadings(
 			scheduler.liveReadings(scheduler.config.AnalysisLimit),
 			scheduler.config.AnalysisLimit,
 		)
+	}
+	if !durableStoreReady(scheduler.store) {
+		if len(liveReadings) > 0 {
+			return liveReadings, insightsAnalysisSourceLive, nil
+		}
+		return nil, insightsAnalysisSourceDurable, ErrStoreUnavailable
 	}
 	if trigger == "event" && len(liveReadings) > 0 {
 		return liveReadings, insightsAnalysisSourceLive, nil

@@ -109,7 +109,7 @@ func (store *RuntimeStore) SaveInsightsSnapshot(
 	ctx context.Context,
 	snapshot InsightsSnapshot,
 ) error {
-	current := store.currentOrConnect(ctx)
+	current := store.current()
 	if current == nil {
 		return ErrStoreUnavailable
 	}
@@ -125,7 +125,7 @@ func (store *RuntimeStore) SaveInsightsSnapshot(
 func (store *RuntimeStore) LatestInsightsSnapshot(
 	ctx context.Context,
 ) (InsightsSnapshot, bool, error) {
-	current := store.currentOrConnect(ctx)
+	current := store.current()
 	if current == nil {
 		return InsightsSnapshot{}, false, ErrStoreUnavailable
 	}
@@ -139,7 +139,7 @@ func (store *RuntimeStore) LatestInsightsSnapshot(
 }
 
 func (store *RuntimeStore) AddOpsEvent(ctx context.Context, event OpsEvent) error {
-	current := store.currentOrConnect(ctx)
+	current := store.current()
 	if current == nil {
 		return ErrStoreUnavailable
 	}
@@ -153,7 +153,7 @@ func (store *RuntimeStore) AddOpsEvent(ctx context.Context, event OpsEvent) erro
 }
 
 func (store *RuntimeStore) LatestOpsEvents(ctx context.Context, limit int) ([]OpsEvent, error) {
-	current := store.currentOrConnect(ctx)
+	current := store.current()
 	if current == nil {
 		return nil, ErrStoreUnavailable
 	}

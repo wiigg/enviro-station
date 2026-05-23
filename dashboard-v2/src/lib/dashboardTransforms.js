@@ -326,12 +326,7 @@ export function buildHistoryUrl(backendBaseUrl, windowOption, nowMs = Date.now()
 }
 
 export function appendReadingForWindow(readings, reading, windowOption) {
-  const cutoffTimestamp =
-    reading.timestamp - (windowOption.retainedRangeMs ?? windowOption.rangeMs);
-  const nextReadings = [...readings, reading].filter(
-    (existingReading) => existingReading.timestamp >= cutoffTimestamp
-  );
-  return downsampleReadings(nextReadings, windowOption.queryMaxPoints);
+  return mergeReadingsForWindow([readings, [reading]], windowOption);
 }
 
 export function mergeReadingsForWindow(readingSets, windowOption) {

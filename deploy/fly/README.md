@@ -63,14 +63,14 @@ cd ..
 
 ## Device Settings
 
-For lower Neon write volume while keeping the dashboard responsive, keep:
+For near-realtime dashboard recovery while keeping write volume batched, keep:
 
 ```dotenv
 DEVICE_LIVE_REQUIRE_SUBSCRIBER=true
 DEVICE_LIVE_INTERVAL_SECONDS=1
 DEVICE_LIVE_STATUS_INTERVAL_SECONDS=10
 DEVICE_LIVE_STATUS_IDLE_MAX_SECONDS=900
-DEVICE_FLUSH_INTERVAL_SECONDS=1800
+DEVICE_FLUSH_INTERVAL_SECONDS=60
 ```
 
 Increasing `DEVICE_LIVE_STATUS_IDLE_MAX_SECONDS` reduces idle API traffic further

@@ -23,6 +23,29 @@ func (buffer *liveBuffer) add(reading SensorReading) {
 	buffer.mu.Lock()
 	defer buffer.mu.Unlock()
 
+	buffer.addLocked(reading)
+}
+
+func (buffer *liveBuffer) addIfNewer(reading SensorReading) bool {
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+
+	for index := len(buffer.readings) - 1; index >= 0; index-- {
+		existing := buffer.readings[index]
+		if existing.DeviceID != reading.DeviceID {
+			continue
+		}
+		if existing.Timestamp >= reading.Timestamp {
+			return false
+		}
+		break
+	}
+
+	buffer.addLocked(reading)
+	return true
+}
+
+func (buffer *liveBuffer) addLocked(reading SensorReading) {
 	if len(buffer.readings) == buffer.limit {
 		copy(buffer.readings, buffer.readings[1:])
 		buffer.readings[len(buffer.readings)-1] = reading

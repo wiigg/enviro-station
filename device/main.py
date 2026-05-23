@@ -43,7 +43,7 @@ def main():
     batch_size = env_int("DEVICE_BATCH_SIZE", 1000)
     timeout_seconds = env_int("DEVICE_HTTP_TIMEOUT_SECONDS", 5)
     max_pending = env_int("DEVICE_MAX_PENDING", 5000)
-    flush_interval_seconds = env_int("DEVICE_FLUSH_INTERVAL_SECONDS", 1800)
+    flush_interval_seconds = env_int("DEVICE_FLUSH_INTERVAL_SECONDS", 60)
     read_interval_seconds = env_int("DEVICE_READ_INTERVAL_SECONDS", UPDATE_INTERVAL)
     live_interval_seconds = env_int("DEVICE_LIVE_INTERVAL_SECONDS", 1)
     live_status_interval_seconds = env_int("DEVICE_LIVE_STATUS_INTERVAL_SECONDS", 10)
