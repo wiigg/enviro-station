@@ -17,6 +17,8 @@ const TOOLTIP_CONTENT_STYLE = {
   boxShadow: "0 12px 30px rgba(19, 28, 43, 0.12)"
 };
 const PARTICULATE_TICK_INTERVALS = 5;
+const PARTICULATE_MIN_AXIS_MAX = 4;
+const PARTICULATE_MIN_TICK_STEP = 2;
 
 const TREND_PANELS = [
   {
@@ -158,10 +160,15 @@ function particulateAxisTicks(chartData, keys) {
     }
   }
 
-  const paddedMax = max > 0 ? max * 1.15 : 1;
-  const step = niceAxisStep(paddedMax / PARTICULATE_TICK_INTERVALS);
+  const paddedMax = Math.max(max * 1.15, PARTICULATE_MIN_AXIS_MAX);
+  const step = Math.max(
+    PARTICULATE_MIN_TICK_STEP,
+    niceAxisStep(paddedMax / PARTICULATE_TICK_INTERVALS)
+  );
+  const axisMax = Math.ceil(paddedMax / step) * step;
+  const tickCount = Math.round(axisMax / step);
   return Array.from(
-    { length: PARTICULATE_TICK_INTERVALS + 1 },
+    { length: tickCount + 1 },
     (_item, index) => step * index
   );
 }
@@ -169,16 +176,13 @@ function particulateAxisTicks(chartData, keys) {
 function niceAxisStep(value) {
   const magnitude = 10 ** Math.floor(Math.log10(value));
   const fraction = value / magnitude;
-  if (fraction <= 1) {
+  if (fraction <= 1.5) {
     return magnitude;
   }
-  if (fraction <= 2) {
+  if (fraction <= 3) {
     return 2 * magnitude;
   }
-  if (fraction <= 2.5) {
-    return 2.5 * magnitude;
-  }
-  if (fraction <= 5) {
+  if (fraction <= 7) {
     return 5 * magnitude;
   }
   return 10 * magnitude;
