@@ -158,7 +158,7 @@ function particulateAxisTicks(chartData, keys) {
     }
   }
 
-  const paddedMax = Math.max(max * 1.15, 10);
+  const paddedMax = max > 0 ? max * 1.15 : 1;
   const step = niceAxisStep(paddedMax / PARTICULATE_TICK_INTERVALS);
   return Array.from(
     { length: PARTICULATE_TICK_INTERVALS + 1 },
