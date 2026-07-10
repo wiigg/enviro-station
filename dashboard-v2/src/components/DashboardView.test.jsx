@@ -50,7 +50,7 @@ describe("DashboardView", () => {
   it("selects a requested time window", () => {
     const onSelectWindow = renderDashboard();
 
-    fireEvent.click(screen.getByRole("tab", { name: "24h" }));
+    fireEvent.click(screen.getByRole("button", { name: "24h" }));
 
     expect(onSelectWindow).toHaveBeenCalledWith("24h");
   });
@@ -58,7 +58,12 @@ describe("DashboardView", () => {
   it("shows connection and reading freshness", () => {
     renderDashboard();
 
-    expect(screen.getByText("Connected")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Connected");
+    expect(screen.getByRole("group", { name: "Time range" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Live" })).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    );
     expect(screen.getByText(/Last reading/)).toBeInTheDocument();
   });
 });

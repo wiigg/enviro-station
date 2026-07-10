@@ -204,7 +204,12 @@ function niceAxisStep(value) {
 
 const StatusChip = memo(function StatusChip({ connectionStatus }) {
   return (
-    <span className={`chip chipStatus ${statusClassName(connectionStatus)}`}>
+    <span
+      className={`chip chipStatus ${statusClassName(connectionStatus)}`}
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+    >
       {statusLabel(connectionStatus)}
     </span>
   );
@@ -217,27 +222,27 @@ const WindowControls = memo(function WindowControls({
 }) {
   return (
     <section className="controls reveal" aria-label="Dashboard time range">
-      <div className="controlGroup" role="tablist" aria-label="Time range">
+      <fieldset className="controlGroup">
+        <legend className="visuallyHidden">Time range</legend>
         {windowOptions.map((windowOption) => (
           <button
             key={windowOption.id}
             className={`segmentButton ${windowOption.id === selectedWindowId ? "segmentActive" : ""}`}
             type="button"
-            role="tab"
-            aria-selected={windowOption.id === selectedWindowId}
+            aria-pressed={windowOption.id === selectedWindowId}
             onClick={() => onSelectWindow(windowOption.id)}
           >
             {windowOption.label}
           </button>
         ))}
-      </div>
+      </fieldset>
     </section>
   );
 });
 
 const KpiGrid = memo(function KpiGrid({ kpis }) {
   return (
-    <section className="kpiGrid reveal">
+    <section className="kpiGrid reveal" aria-label="Current readings">
       {kpis.map((item) => (
         <article className={`card kpi kpi-${item.state}`} key={item.label}>
           <div className="kpiHead">
@@ -371,7 +376,9 @@ const InsightsCard = memo(function InsightsCard({
         <span>{insightSource}</span>
       </div>
       {isLoadingInsights && insights.length === 0 ? (
-        <p className="emptyState">Analyzing latest readings...</p>
+        <p className="emptyState" role="status">
+          Analyzing latest readings...
+        </p>
       ) : insights.length ? (
         <ul className="insightList">
           {insights.map((insight) => (
@@ -390,7 +397,9 @@ const InsightsCard = memo(function InsightsCard({
           ))}
         </ul>
       ) : insightsError ? (
-        <p className="emptyState alertError">{insightsError}</p>
+        <p className="emptyState alertError" role="alert">
+          {insightsError}
+        </p>
       ) : (
         <p className="emptyState">
           No active insights for the selected window.
@@ -409,9 +418,13 @@ const OpsFeedCard = memo(function OpsFeedCard({ feedError, feedItems, isLoadingF
         <span>Recent backend events</span>
       </div>
       {isLoadingFeed ? (
-        <p className="emptyState">Loading operations log...</p>
+        <p className="emptyState" role="status">
+          Loading operations log...
+        </p>
       ) : feedError ? (
-        <p className="emptyState alertError">{feedError}</p>
+        <p className="emptyState alertError" role="alert">
+          {feedError}
+        </p>
       ) : feedItems.length ? (
         <ul>
           {feedItems.map((incident) => (
@@ -484,12 +497,20 @@ export default function DashboardView({
           </div>
         </header>
 
-        <section className={`overviewStrip overview-${summary.tone} reveal`}>
+        <section
+          className={`overviewStrip overview-${summary.tone} reveal`}
+          aria-live="polite"
+          aria-atomic="true"
+        >
           <div>
             <p className="overviewLabel">Current state</p>
             <p className="overviewValue">{summary.label}</p>
           </div>
-          {lastError ? <p className="overviewWarning">{lastError}</p> : null}
+          {lastError ? (
+            <p className="overviewWarning" role="alert">
+              {lastError}
+            </p>
+          ) : null}
         </section>
 
         <WindowControls
