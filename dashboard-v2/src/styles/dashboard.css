@@ -1,0 +1,274 @@
+.kpiGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.kpi {
+  position: relative;
+  overflow: hidden;
+  min-height: 132px;
+  padding: 15px;
+}
+
+.kpi::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  content: "";
+  background: var(--ok);
+}
+
+.kpi-warn::before {
+  background: var(--warn);
+}
+
+.kpi-alert::before {
+  background: var(--alert);
+}
+
+.kpi-muted::before {
+  background: var(--accent-blue);
+}
+
+.kpiHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-weight: 850;
+}
+
+.statePill {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.state-ok {
+  background: #e5f4ee;
+  color: var(--ok);
+}
+
+.state-warn {
+  background: #fff0dc;
+  color: var(--warn);
+}
+
+.state-alert {
+  background: #ffe9e9;
+  color: var(--alert);
+}
+
+.state-muted {
+  background: #e9eefb;
+  color: var(--accent-blue);
+}
+
+.kpiValue {
+  margin: 12px 0 6px;
+  color: var(--text);
+  font-size: clamp(1.75rem, 3vw, 2.35rem);
+  font-weight: 900;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.kpiValue span {
+  margin-left: 7px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 850;
+}
+
+.kpiTrend {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.83rem;
+  line-height: 1.38;
+}
+
+.dashboardGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.75fr) minmax(320px, 0.82fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.trendStack,
+.sideStack {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.panel {
+  padding: 15px;
+}
+
+.panelHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.panelTitle {
+  display: grid;
+  gap: 3px;
+}
+
+.panelTitle h2 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
+.panelTitle > span {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.chartLegend {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.chartLegend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.chartLegend i {
+  display: block;
+  width: 14px;
+  height: 3px;
+  border-radius: 999px;
+}
+
+.chartLegend .averageLegend {
+  opacity: 0.72;
+}
+
+.chart {
+  width: 100%;
+  height: 270px;
+}
+
+.trendStack .panel:first-child .chart {
+  height: 320px;
+}
+
+.emptyState {
+  margin: 24px 0 12px;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.insightList,
+.feed ul {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.insightItem,
+.feed li {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.insightItem:first-child,
+.feed li:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.insightMeta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.insightKind,
+.insightSeverity {
+  margin: 0;
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.insightKind {
+  color: var(--muted);
+}
+
+.insightSeverityCritical {
+  color: var(--alert);
+}
+
+.insightSeverityWarn {
+  color: var(--warn);
+}
+
+.insightSeverityInfo {
+  color: var(--accent-blue);
+}
+
+.insightTitle,
+.event {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 850;
+  line-height: 1.35;
+}
+
+.insightMessage,
+.detail {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.feed li {
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.time {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.alertError {
+  color: var(--alert);
+}

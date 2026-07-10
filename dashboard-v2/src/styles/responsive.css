@@ -1,0 +1,96 @@
+@media (max-width: 1180px) {
+  .brandLockup {
+    flex-basis: 100%;
+  }
+
+  .topbarMeta {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 1100px) {
+  .kpiGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dashboardGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .sideStack {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .shell {
+    padding: 18px 12px 28px;
+  }
+
+  .layout {
+    gap: 12px;
+  }
+
+  .topbar,
+  .overviewStrip {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .topbar {
+    gap: 10px;
+  }
+
+  .brandLockup {
+    flex: 1 1 auto;
+    width: 100%;
+    align-items: center;
+    gap: 11px;
+  }
+
+  .brandMark {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+  }
+
+  .titleBlock {
+    flex: 0 1 auto;
+    width: 100%;
+    padding-top: 0;
+  }
+
+  .topbarMeta {
+    justify-content: flex-start;
+  }
+
+  .overviewWarning {
+    flex: 0 1 auto;
+    width: 100%;
+    max-width: none;
+    text-align: left;
+  }
+
+  .controlGroup {
+    width: 100%;
+    overflow-x: auto;
+  }
+
+  .segmentButton {
+    flex: 1 0 auto;
+  }
+
+  .kpiGrid,
+  .sideStack {
+    grid-template-columns: 1fr;
+  }
+
+  .chart,
+  .trendStack .panel:first-child .chart {
+    height: 240px;
+  }
+
+  .feed li {
+    grid-template-columns: 1fr;
+  }
+}
