@@ -35,10 +35,9 @@ export function normalizeOpsEvent(rawEvent) {
   const { title, detail } = normalizeOpsEventCopy(rawTitle, rawDetail);
 
   const idRaw = rawEvent.id;
-  const id =
-    typeof idRaw === "number" || typeof idRaw === "string"
-      ? String(idRaw)
-      : `${timestampRaw}-${title}-${detail}`.toLowerCase();
+  const sourceId =
+    typeof idRaw === "number" || typeof idRaw === "string" ? String(idRaw) : "event";
+  const id = `${sourceId}-${timestampRaw}-${title}-${detail}`.toLowerCase();
 
   return {
     id,

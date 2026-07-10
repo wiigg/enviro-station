@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { WINDOW_OPTIONS_BY_ID } from "./dashboardConfig";
-import { buildHistoryUrl, downsampleReadings } from "./dashboardTransforms";
+import {
+  buildHistoryUrl,
+  downsampleReadings,
+  normalizeOpsEvent
+} from "./dashboardTransforms";
 
 describe("dashboard transforms", () => {
   it("preserves endpoints and a particulate spike while downsampling", () => {
@@ -27,5 +31,22 @@ describe("dashboard transforms", () => {
     expect(url.pathname).toBe("/api/readings");
     expect(url.searchParams.get("to")).toBe(String(now));
     expect(url.searchParams.get("max_points")).toBe("960");
+  });
+
+  it("creates stable unique keys when live events reuse a zero database id", () => {
+    const first = normalizeOpsEvent({
+      id: 0,
+      timestamp: 1_800_000_000_000,
+      title: "Device connected",
+      detail: "Telemetry resumed"
+    });
+    const second = normalizeOpsEvent({
+      id: 0,
+      timestamp: 1_800_000_001_000,
+      title: "Device disconnected",
+      detail: "Telemetry paused"
+    });
+
+    expect(first.id).not.toBe(second.id);
   });
 });
