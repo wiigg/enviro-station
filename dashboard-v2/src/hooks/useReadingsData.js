@@ -35,6 +35,21 @@ function shouldOverlayLiveReadings(windowId) {
   return STREAM_WINDOW_IDS.includes(windowId) && !LIVE_SOURCE_WINDOW_IDS.has(windowId);
 }
 
+export function resolveConnectionStatus({
+  isStreamConnected,
+  latestReadingAt,
+  previousStatus,
+  now = Date.now()
+}) {
+  if (!isStreamConnected) {
+    return previousStatus === "degraded" ? "degraded" : "connecting";
+  }
+  if (!latestReadingAt) {
+    return "waiting";
+  }
+  return now - latestReadingAt <= LIVE_READING_STALE_AFTER_MS ? "live" : "offline";
+}
+
 function useReadingsHistoryWindows({
   backendBaseUrl,
   historyCacheRef,
@@ -115,8 +130,7 @@ function useReadingsHistoryWindows({
     }
 
     const shouldRevalidate =
-      !cacheEntry ||
-      !cacheEntry.isHydrated ||
+      !cacheEntry?.isHydrated ||
       Date.now() - cacheEntry.fetchedAt > selectedWindow.cacheTtlMs;
     if (!shouldRevalidate) {
       return () => {
@@ -424,20 +438,13 @@ export function useReadingsData(backendBaseUrl) {
   }, [windowId]);
 
   const syncConnectionStatus = useCallback(() => {
-    setConnectionStatus((previousStatus) => {
-      if (!streamConnectedRef.current) {
-        return previousStatus === "degraded" ? "degraded" : "connecting";
-      }
-
-      const latestReadingAt = latestLiveReadingAtRef.current;
-      if (!latestReadingAt) {
-        return "waiting";
-      }
-
-      return Date.now() - latestReadingAt <= LIVE_READING_STALE_AFTER_MS
-        ? "live"
-        : "offline";
-    });
+    setConnectionStatus((previousStatus) =>
+      resolveConnectionStatus({
+        isStreamConnected: streamConnectedRef.current,
+        latestReadingAt: latestLiveReadingAtRef.current,
+        previousStatus
+      })
+    );
   }, []);
 
   useReadingsHistoryWindows({

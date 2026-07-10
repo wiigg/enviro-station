@@ -11,10 +11,10 @@ jobs:
   backend:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: backend/go.mod
 
@@ -25,10 +25,10 @@ jobs:
   dashboard-v2:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
@@ -38,6 +38,28 @@ jobs:
         working-directory: dashboard-v2
         run: npm ci
 
+      - name: Lint dashboard-v2
+        working-directory: dashboard-v2
+        run: npm run lint
+
+      - name: Test dashboard-v2
+        working-directory: dashboard-v2
+        run: npm test
+
       - name: Build dashboard-v2
         working-directory: dashboard-v2
         run: npm run build
+
+  device:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Check device modules
+        working-directory: device
+        run: python -m compileall -q .
