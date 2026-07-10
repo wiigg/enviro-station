@@ -89,6 +89,7 @@ export function useDashboardData() {
   );
 
   const kpis = useMemo(() => buildKpis(readings, windowId), [readings, windowId]);
+  const lastReadingAt = readings[readings.length - 1]?.timestamp ?? null;
 
   const alignedInsights = useMemo(
     () => insights.map((insight) => alignInsightSeverity(insight, kpis)),
@@ -139,6 +140,7 @@ export function useDashboardData() {
     isLoadingInsights,
     kpis,
     lastError,
+    lastReadingAt,
     onSelectWindow: setWindowId,
     selectedWindow,
     temperatureDomain,

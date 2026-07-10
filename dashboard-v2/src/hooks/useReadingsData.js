@@ -6,7 +6,9 @@ import {
   parseJSONResponse
 } from "../lib/dashboardApi";
 import {
+  CONNECTION_STATUS_CHECK_INTERVAL_MS,
   DASHBOARD_DEVICE_ID,
+  LIVE_READING_STALE_AFTER_MS,
   LIVE_SOURCE_WINDOW_IDS,
   PREFETCH_WINDOW_IDS,
   STREAM_WINDOW_IDS,
@@ -35,8 +37,8 @@ function shouldOverlayLiveReadings(windowId) {
 
 function useReadingsHistoryWindows({
   backendBaseUrl,
-  hasLiveDataRef,
   historyCacheRef,
+  latestLiveReadingAtRef,
   selectedWindow,
   selectedWindowIdRef,
   syncConnectionStatus,
@@ -100,13 +102,14 @@ function useReadingsHistoryWindows({
       setReadings(cacheEntry.readings);
       setLastError("");
       if (LIVE_SOURCE_WINDOW_IDS.has(selectedWindow.id)) {
-        hasLiveDataRef.current = cacheEntry.readings.length > 0;
+        latestLiveReadingAtRef.current =
+          cacheEntry.readings[cacheEntry.readings.length - 1]?.timestamp ?? 0;
         syncConnectionStatus();
       }
     } else {
       setReadings([]);
       if (LIVE_SOURCE_WINDOW_IDS.has(selectedWindow.id)) {
-        hasLiveDataRef.current = false;
+        latestLiveReadingAtRef.current = 0;
         syncConnectionStatus();
       }
     }
@@ -131,7 +134,8 @@ function useReadingsHistoryWindows({
           setReadings(normalized);
         }
         if (LIVE_SOURCE_WINDOW_IDS.has(selectedWindow.id)) {
-          hasLiveDataRef.current = normalized.length > 0;
+          latestLiveReadingAtRef.current =
+            normalized[normalized.length - 1]?.timestamp ?? 0;
           syncConnectionStatus();
         }
         setLastError("");
@@ -152,7 +156,7 @@ function useReadingsHistoryWindows({
     };
   }, [
     historyCacheRef,
-    hasLiveDataRef,
+    latestLiveReadingAtRef,
     loadReadingsWindow,
     selectedWindow.cacheTtlMs,
     selectedWindow.id,
@@ -272,15 +276,14 @@ function useReadingsHistoryWindows({
 function useReadingsStreamConnection({
   backendBaseUrl,
   historyCacheRef,
+  latestLiveReadingAtRef,
   selectedWindowIdRef,
-  streamOpenedRef,
+  streamConnectedRef,
   syncConnectionStatus,
   setConnectionStatus,
   setLastError,
   setReadings
 }) {
-  const lastStreamEventAtRef = useRef(0);
-
   useEffect(() => {
     let closed = false;
     let eventSource = null;
@@ -292,6 +295,7 @@ function useReadingsStreamConnection({
         return;
       }
 
+      streamConnectedRef.current = false;
       setConnectionStatus("connecting");
       const streamUrl = new URL(`${backendBaseUrl}/api/stream`);
       if (DASHBOARD_DEVICE_ID) {
@@ -310,7 +314,7 @@ function useReadingsStreamConnection({
             return;
           }
 
-          lastStreamEventAtRef.current = Date.now();
+          latestLiveReadingAtRef.current = reading.timestamp;
           const streamUpdatedAt = Date.now();
 
           for (const targetWindowId of STREAM_WINDOW_IDS) {
@@ -344,7 +348,7 @@ function useReadingsStreamConnection({
       eventSource.onmessage = handleReading;
 
       eventSource.onopen = () => {
-        streamOpenedRef.current = true;
+        streamConnectedRef.current = true;
         syncConnectionStatus();
         retryDelayMs = 1000;
       };
@@ -354,6 +358,7 @@ function useReadingsStreamConnection({
           return;
         }
 
+        streamConnectedRef.current = false;
         setConnectionStatus("degraded");
         const reconnectDelay = retryDelayMs;
         retryDelayMs = Math.min(retryDelayMs * 2, 15000);
@@ -367,6 +372,7 @@ function useReadingsStreamConnection({
 
     return () => {
       closed = true;
+      streamConnectedRef.current = false;
       if (reconnectTimeout) {
         clearTimeout(reconnectTimeout);
       }
@@ -377,7 +383,9 @@ function useReadingsStreamConnection({
   }, [
     backendBaseUrl,
     historyCacheRef,
+    latestLiveReadingAtRef,
     selectedWindowIdRef,
+    streamConnectedRef,
     syncConnectionStatus,
     setConnectionStatus,
     setLastError,
@@ -386,21 +394,13 @@ function useReadingsStreamConnection({
 
   useEffect(() => {
     const timer = setInterval(() => {
-      if (!lastStreamEventAtRef.current) {
-        return;
-      }
-
-      if (Date.now() - lastStreamEventAtRef.current > 45000) {
-        setConnectionStatus((previousStatus) =>
-          previousStatus === "live" ? "offline" : previousStatus
-        );
-      }
-    }, 5000);
+      syncConnectionStatus();
+    }, CONNECTION_STATUS_CHECK_INTERVAL_MS);
 
     return () => {
       clearInterval(timer);
     };
-  }, [setConnectionStatus]);
+  }, [syncConnectionStatus]);
 }
 
 export function useReadingsData(backendBaseUrl) {
@@ -409,10 +409,10 @@ export function useReadingsData(backendBaseUrl) {
   const [connectionStatus, setConnectionStatus] = useState("connecting");
   const [lastError, setLastError] = useState("");
 
-  const hasLiveDataRef = useRef(false);
   const historyCacheRef = useRef({});
+  const latestLiveReadingAtRef = useRef(0);
   const selectedWindowIdRef = useRef(windowId);
-  const streamOpenedRef = useRef(false);
+  const streamConnectedRef = useRef(false);
 
   const selectedWindow = useMemo(
     () => WINDOW_OPTIONS_BY_ID[windowId] ?? WINDOW_OPTIONS[0],
@@ -425,20 +425,25 @@ export function useReadingsData(backendBaseUrl) {
 
   const syncConnectionStatus = useCallback(() => {
     setConnectionStatus((previousStatus) => {
-      if (previousStatus === "degraded") {
-        return previousStatus;
+      if (!streamConnectedRef.current) {
+        return previousStatus === "degraded" ? "degraded" : "connecting";
       }
-      if (!streamOpenedRef.current) {
-        return "connecting";
+
+      const latestReadingAt = latestLiveReadingAtRef.current;
+      if (!latestReadingAt) {
+        return "waiting";
       }
-      return hasLiveDataRef.current ? "live" : "waiting";
+
+      return Date.now() - latestReadingAt <= LIVE_READING_STALE_AFTER_MS
+        ? "live"
+        : "offline";
     });
   }, []);
 
   useReadingsHistoryWindows({
     backendBaseUrl,
-    hasLiveDataRef,
     historyCacheRef,
+    latestLiveReadingAtRef,
     selectedWindow,
     selectedWindowIdRef,
     syncConnectionStatus,
@@ -449,8 +454,9 @@ export function useReadingsData(backendBaseUrl) {
   useReadingsStreamConnection({
     backendBaseUrl,
     historyCacheRef,
+    latestLiveReadingAtRef,
     selectedWindowIdRef,
-    streamOpenedRef,
+    streamConnectedRef,
     syncConnectionStatus,
     setConnectionStatus,
     setLastError,

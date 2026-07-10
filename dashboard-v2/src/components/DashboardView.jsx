@@ -119,6 +119,20 @@ function formatChartLabel(value) {
   });
 }
 
+function formatLastReading(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "Unknown";
+  }
+  return date.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  });
+}
+
 function insightSeverityClassName(severity) {
   if (severity === "critical") {
     return "insightSeverityCritical";
@@ -430,6 +444,7 @@ export default function DashboardView({
   isLoadingInsights,
   kpis,
   lastError,
+  lastReadingAt,
   onSelectWindow,
   selectedWindow,
   temperatureDomain,
@@ -456,6 +471,16 @@ export default function DashboardView({
           <div className="topbarMeta">
             <StatusChip connectionStatus={connectionStatus} />
             <span className="chip">{selectedWindow.label}</span>
+            {lastReadingAt ? (
+              <span className="chip">
+                Last reading{" "}
+                <time dateTime={new Date(lastReadingAt).toISOString()}>
+                  {formatLastReading(lastReadingAt)}
+                </time>
+              </span>
+            ) : (
+              <span className="chip">No readings yet</span>
+            )}
           </div>
         </header>
 
