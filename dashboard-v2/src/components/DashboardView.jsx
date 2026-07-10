@@ -26,7 +26,7 @@ const TREND_PANELS = [
     subtitle: "PM2.5 peak-aware trend",
     ariaLabel: "Particulate trend chart",
     lineDataKey: "pm2",
-    lineStroke: "#f27a3e",
+    lineStroke: "#c95727",
     averageDataKey: "pm2Average",
     averageStroke: "#4f6278",
     tooltipName: "PM2.5",
