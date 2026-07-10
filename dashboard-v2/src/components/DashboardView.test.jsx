@@ -87,5 +87,11 @@ describe("DashboardView", () => {
       expect(axis).toHaveAttribute("data-axis-type", "number");
       expect(axis).toHaveAttribute("data-axis-scale", "time");
     }
+
+    expect(screen.getByRole("heading", { name: "Live monitoring" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("img", { name: "Particulate trend chart" })
+    ).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Temperature trend chart" })).toBeInTheDocument();
   });
 });

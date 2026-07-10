@@ -13,7 +13,10 @@ export default memo(function KpiGrid({ kpis }) {
       {kpis.map((item) => (
         <article className={`card kpi kpi-${item.state}`} key={item.label}>
           <div className="kpiHead">
-            <span>{item.label}</span>
+            <span className="kpiLabel">
+              <i className="kpiSignal" aria-hidden="true" />
+              {item.label}
+            </span>
             <span className={`statePill state-${item.state}`}>
               {KPI_STATE_LABELS[item.state] ?? item.state}
             </span>

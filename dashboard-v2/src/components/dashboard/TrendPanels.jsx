@@ -22,8 +22,7 @@ const PARTICULATE_MIN_TICK_STEP = 2;
 
 const TREND_PANELS = [
   {
-    title: "Particulate Trend",
-    subtitle: "PM2.5 peak-aware trend",
+    title: "Particulate matter",
     ariaLabel: "Particulate trend chart",
     lineDataKey: "pm2",
     lineStroke: "#c95727",
@@ -34,9 +33,8 @@ const TREND_PANELS = [
     useParticulateYAxis: true
   },
   {
-    title: "Comfort Trend",
-    subtitle: "Temperature over selected window",
-    ariaLabel: "Comfort trend chart",
+    title: "Temperature",
+    ariaLabel: "Temperature trend chart",
     lineDataKey: "temperature",
     lineStroke: "#1f8a78",
     averageDataKey: "temperatureAverage",
@@ -99,7 +97,6 @@ function niceAxisStep(value) {
 
 const TrendPanel = memo(function TrendPanel({
   title,
-  subtitle,
   ariaLabel,
   chartData,
   axisTickFormatter,
@@ -122,10 +119,7 @@ const TrendPanel = memo(function TrendPanel({
   return (
     <article className="card panel">
       <div className="panelHead">
-        <div className="panelTitle">
-          <h2>{title}</h2>
-          <span>{subtitle}</span>
-        </div>
+        <h3>{title}</h3>
         <div className="chartLegend" aria-hidden="true">
           <span>
             <i style={{ backgroundColor: lineStroke }} />
@@ -206,25 +200,29 @@ export default memo(function TrendPanels({
   temperatureDomain
 }) {
   return (
-    <div className="trendStack">
-      {TREND_PANELS.map((panel) => (
-        <TrendPanel
-          key={panel.lineDataKey}
-          title={panel.title}
-          subtitle={panel.subtitle}
-          ariaLabel={panel.ariaLabel}
-          chartData={chartData}
-          axisTickFormatter={axisTickFormatter}
-          yAxisDomain={panel.useTemperatureDomain ? temperatureDomain : panel.yAxisDomain}
-          useParticulateYAxis={panel.useParticulateYAxis}
-          lineDataKey={panel.lineDataKey}
-          lineStroke={panel.lineStroke}
-          averageDataKey={panel.averageDataKey}
-          averageStroke={panel.averageStroke}
-          tooltipName={panel.tooltipName}
-          tooltipUnit={panel.tooltipUnit}
-        />
-      ))}
-    </div>
+    <section className="monitoringSection reveal" aria-labelledby="monitoring-title">
+      <div className="sectionHeading">
+        <h2 id="monitoring-title">Live monitoring</h2>
+      </div>
+      <div className="trendGrid">
+        {TREND_PANELS.map((panel) => (
+          <TrendPanel
+            key={panel.lineDataKey}
+            title={panel.title}
+            ariaLabel={panel.ariaLabel}
+            chartData={chartData}
+            axisTickFormatter={axisTickFormatter}
+            yAxisDomain={panel.useTemperatureDomain ? temperatureDomain : panel.yAxisDomain}
+            useParticulateYAxis={panel.useParticulateYAxis}
+            lineDataKey={panel.lineDataKey}
+            lineStroke={panel.lineStroke}
+            averageDataKey={panel.averageDataKey}
+            averageStroke={panel.averageStroke}
+            tooltipName={panel.tooltipName}
+            tooltipUnit={panel.tooltipUnit}
+          />
+        ))}
+      </div>
+    </section>
   );
 });

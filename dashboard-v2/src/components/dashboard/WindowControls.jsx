@@ -6,7 +6,8 @@ export default memo(function WindowControls({
   windowOptions
 }) {
   return (
-    <section className="controls reveal" aria-label="Dashboard time range">
+    <section className="controls" aria-label="Dashboard time range">
+      <p className="controlLabel">Time range</p>
       <fieldset className="controlGroup">
         <legend className="visuallyHidden">Time range</legend>
         {windowOptions.map((windowOption) => (

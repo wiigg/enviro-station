@@ -2,7 +2,7 @@ import { memo } from "react";
 
 function dashboardSummary(kpis, connectionStatus) {
   if (connectionStatus === "offline") {
-    return { label: "Offline", tone: "alert" };
+    return { label: "Stale readings", tone: "alert" };
   }
   if (connectionStatus === "degraded") {
     return { label: "Reconnecting", tone: "warn" };
@@ -11,12 +11,12 @@ function dashboardSummary(kpis, connectionStatus) {
     return { label: "Action needed", tone: "alert" };
   }
   if (kpis.some((item) => item.state === "warn")) {
-    return { label: "Watch", tone: "warn" };
+    return { label: "Worth watching", tone: "warn" };
   }
   if (connectionStatus === "waiting" || kpis.every((item) => item.state === "muted")) {
-    return { label: "Waiting", tone: "muted" };
+    return { label: "Waiting for readings", tone: "muted" };
   }
-  return { label: "Stable", tone: "ok" };
+  return { label: "Environment stable", tone: "ok" };
 }
 
 function statusLabel(status) {
@@ -30,7 +30,7 @@ function statusLabel(status) {
     return "Reconnecting";
   }
   if (status === "offline") {
-    return "Offline";
+    return "Data stale";
   }
   return "Connecting";
 }
@@ -79,18 +79,18 @@ const StatusChip = memo(function StatusChip({ connectionStatus }) {
 });
 
 export default memo(function DashboardHeader({
+  children,
   connectionStatus,
   deviceLabel,
   kpis,
   lastError,
-  lastReadingAt,
-  selectedWindow
+  lastReadingAt
 }) {
   const summary = dashboardSummary(kpis, connectionStatus);
 
   return (
-    <>
-      <header className="topbar reveal">
+    <header className={`dashboardHero overview-${summary.tone} reveal`}>
+      <div className="heroTopbar">
         <div className="brandLockup">
           <img
             className="brandMark"
@@ -103,37 +103,37 @@ export default memo(function DashboardHeader({
             <h1>Air quality dashboard</h1>
           </div>
         </div>
-        <div className="topbarMeta">
-          <StatusChip connectionStatus={connectionStatus} />
-          <span className="chip">{selectedWindow.label}</span>
-          {lastReadingAt ? (
-            <span className="chip readingChip">
-              <span>Last reading</span>
+        <StatusChip connectionStatus={connectionStatus} />
+      </div>
+
+      <div className="heroBody">
+        <div className="overviewSummary" aria-live="polite" aria-atomic="true">
+          <p className="overviewLabel">Station status</p>
+          <div className="overviewTitle">
+            <span className="overviewSignal" aria-hidden="true" />
+            <p className="overviewValue">{summary.label}</p>
+          </div>
+          {lastError ? (
+            <p className="overviewWarning" role="alert">
+              {lastError}
+            </p>
+          ) : null}
+        </div>
+
+        <div className="heroTools">
+          <div className="readingMeta">
+            <span>Last reading</span>
+            {lastReadingAt ? (
               <time dateTime={new Date(lastReadingAt).toISOString()}>
                 {formatLastReading(lastReadingAt)}
               </time>
-            </span>
-          ) : (
-            <span className="chip">No readings yet</span>
-          )}
+            ) : (
+              <strong>No readings yet</strong>
+            )}
+          </div>
+          {children}
         </div>
-      </header>
-
-      <section
-        className={`overviewStrip overview-${summary.tone} reveal`}
-        aria-live="polite"
-        aria-atomic="true"
-      >
-        <div>
-          <p className="overviewLabel">Current state</p>
-          <p className="overviewValue">{summary.label}</p>
-        </div>
-        {lastError ? (
-          <p className="overviewWarning" role="alert">
-            {lastError}
-          </p>
-        ) : null}
-      </section>
-    </>
+      </div>
+    </header>
   );
 });

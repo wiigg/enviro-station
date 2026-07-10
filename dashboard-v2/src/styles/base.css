@@ -1,22 +1,25 @@
 :root {
   color-scheme: light;
-  --bg: #f5f7fa;
+  --bg: #f2f6f5;
   --surface: #ffffff;
-  --surface-soft: #f9fafb;
-  --surface-tint: #eef4f1;
-  --border: #dbe2ea;
-  --border-strong: #c4ced8;
-  --text: #121820;
-  --muted: #647184;
-  --muted-strong: #475569;
-  --accent-hot: #c95727;
-  --accent-cool: #117f72;
-  --accent-blue: #275fc5;
-  --ok: #0b6b4b;
-  --warn: #8f4b0f;
-  --alert: #aa2e2e;
-  --shadow: 0 10px 26px rgba(19, 28, 43, 0.07);
-  --radius: 8px;
+  --surface-soft: #f7faf9;
+  --surface-tint: #eaf4f1;
+  --border: #dbe5e2;
+  --border-strong: #c4d1cd;
+  --text: #15211f;
+  --muted: #65736f;
+  --muted-strong: #41514d;
+  --accent-hot: #c7542d;
+  --accent-cool: #087d70;
+  --accent-blue: #315fc4;
+  --ok: #157052;
+  --warn: #92540f;
+  --alert: #ae3737;
+  --shadow: 0 1px 2px rgba(17, 38, 33, 0.04), 0 14px 38px rgba(17, 38, 33, 0.06);
+  --shadow-raised: 0 18px 50px rgba(10, 30, 25, 0.14);
+  --radius-sm: 10px;
+  --radius: 16px;
+  --radius-lg: 22px;
 }
 
 * {
@@ -35,9 +38,10 @@ body {
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(245, 247, 250, 0) 280px),
-    var(--bg);
+    radial-gradient(circle at 12% 0%, rgba(8, 125, 112, 0.08), transparent 28rem),
+    linear-gradient(180deg, #f8faf9 0, var(--bg) 34rem);
   text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
 }
 
 button,
@@ -45,6 +49,10 @@ input,
 textarea,
 select {
   font: inherit;
+}
+
+button {
+  -webkit-tap-highlight-color: transparent;
 }
 
 .visuallyHidden {
@@ -59,20 +67,19 @@ select {
 
 .shell {
   min-height: 100vh;
-  padding: 28px 20px 40px;
+  padding: clamp(16px, 2.6vw, 36px) clamp(12px, 2.4vw, 32px) 48px;
   overflow-x: clip;
 }
 
 .layout {
-  width: 100%;
-  max-width: 1280px;
-  margin: 0 auto;
   display: grid;
-  gap: 14px;
+  width: min(100%, 1440px);
+  margin: 0 auto;
+  gap: 18px;
 }
 
 .reveal {
-  animation: rise 320ms ease both;
+  animation: rise 340ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
 }
 
 .card {
@@ -82,10 +89,22 @@ select {
   box-shadow: var(--shadow);
 }
 
+.sectionHeading {
+  display: flex;
+  align-items: center;
+}
+
+.sectionHeading h2 {
+  margin: 0;
+  font-size: clamp(1.3rem, 2vw, 1.65rem);
+  line-height: 1.15;
+  letter-spacing: -0.025em;
+}
+
 @keyframes rise {
   from {
     opacity: 0;
-    transform: translateY(5px);
+    transform: translateY(6px);
   }
 
   to {

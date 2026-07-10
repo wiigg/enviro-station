@@ -34,38 +34,35 @@ export default function DashboardView({
           kpis={kpis}
           lastError={lastError}
           lastReadingAt={lastReadingAt}
-          selectedWindow={selectedWindow}
-        />
-
-        <WindowControls
-          onSelectWindow={onSelectWindow}
-          selectedWindowId={selectedWindow.id}
-          windowOptions={windowOptions}
-        />
+        >
+          <WindowControls
+            onSelectWindow={onSelectWindow}
+            selectedWindowId={selectedWindow.id}
+            windowOptions={windowOptions}
+          />
+        </DashboardHeader>
 
         <KpiGrid kpis={kpis} />
 
-        <section className="dashboardGrid reveal">
-          <TrendPanels
-            axisTickFormatter={axisTickFormatter}
-            chartData={chartData}
-            temperatureDomain={temperatureDomain}
-          />
+        <TrendPanels
+          axisTickFormatter={axisTickFormatter}
+          chartData={chartData}
+          temperatureDomain={temperatureDomain}
+        />
 
-          <div className="sideStack">
-            <InsightsCard
-              insightSource={insightSource}
-              insights={insights}
-              insightsError={insightsError}
-              isLoadingInsights={isLoadingInsights}
-              lastError={lastError}
-            />
-            <OpsFeedCard
-              feedError={feedError}
-              feedItems={feedItems}
-              isLoadingFeed={isLoadingFeed}
-            />
-          </div>
+        <section className="intelligenceSection reveal" aria-label="Insights and diagnostics">
+          <InsightsCard
+            insightSource={insightSource}
+            insights={insights}
+            insightsError={insightsError}
+            isLoadingInsights={isLoadingInsights}
+            lastError={lastError}
+          />
+          <OpsFeedCard
+            feedError={feedError}
+            feedItems={feedItems}
+            isLoadingFeed={isLoadingFeed}
+          />
         </section>
       </main>
     </div>
