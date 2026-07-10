@@ -30,7 +30,7 @@ const TREND_PANELS = [
     averageDataKey: "pm2Average",
     averageStroke: "#4f6278",
     tooltipName: "PM2.5",
-    tooltipUnit: "ug/m3",
+    tooltipUnit: "µg/m³",
     useParticulateYAxis: true
   },
   {
@@ -42,7 +42,7 @@ const TREND_PANELS = [
     averageDataKey: "temperatureAverage",
     averageStroke: "#4f6278",
     tooltipName: "Temperature",
-    tooltipUnit: "C",
+    tooltipUnit: "°C",
     useTemperatureDomain: true
   }
 ];

@@ -17,11 +17,13 @@ Optional variables:
 ```bash
 VITE_READ_API_KEY=
 VITE_DEVICE_ID=
+VITE_DEVICE_LABEL=Primary station
 ```
 
 `VITE_READ_API_KEY` is sent on read API fetches and appended to the SSE URL as
 `read_key` so the realtime stream still works when backend `READ_API_KEY` is set.
 `VITE_DEVICE_ID` scopes history, live-buffer reads, and the SSE stream to one device.
+`VITE_DEVICE_LABEL` provides a human-readable station or room name in the header.
 For production Fly deployments, prefer the same-origin Nginx proxy in
 `deploy/fly/dashboard.fly.toml`; it injects `READ_API_KEY` server-side so the
 read key is not embedded in browser JavaScript.

@@ -9,6 +9,7 @@ export default function DashboardView({
   axisTickFormatter,
   chartData,
   connectionStatus,
+  deviceLabel,
   feedError,
   feedItems,
   insightSource,
@@ -29,6 +30,7 @@ export default function DashboardView({
       <main className="layout">
         <DashboardHeader
           connectionStatus={connectionStatus}
+          deviceLabel={deviceLabel}
           kpis={kpis}
           lastError={lastError}
           lastReadingAt={lastReadingAt}

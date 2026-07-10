@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from "react";
 import { buildKpis } from "../lib/readings";
 import { resolveBackendBaseUrl } from "../lib/dashboardApi";
-import { WINDOW_OPTIONS } from "../lib/dashboardConfig";
+import { DASHBOARD_DEVICE_LABEL, WINDOW_OPTIONS } from "../lib/dashboardConfig";
 import {
   buildTrendChartData,
   computeTemperatureDomain,
@@ -131,6 +131,7 @@ export function useDashboardData() {
     axisTickFormatter,
     chartData,
     connectionStatus,
+    deviceLabel: DASHBOARD_DEVICE_LABEL,
     feedError,
     feedItems,
     insightSource,

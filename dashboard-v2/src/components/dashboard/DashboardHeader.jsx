@@ -80,6 +80,7 @@ const StatusChip = memo(function StatusChip({ connectionStatus }) {
 
 export default memo(function DashboardHeader({
   connectionStatus,
+  deviceLabel,
   kpis,
   lastError,
   lastReadingAt,
@@ -98,7 +99,7 @@ export default memo(function DashboardHeader({
             aria-hidden="true"
           />
           <div className="titleBlock">
-            <p className="eyebrow">Enviro Station</p>
+            <p className="eyebrow">Enviro Station · {deviceLabel}</p>
             <h1>Air quality dashboard</h1>
           </div>
         </div>
@@ -106,8 +107,8 @@ export default memo(function DashboardHeader({
           <StatusChip connectionStatus={connectionStatus} />
           <span className="chip">{selectedWindow.label}</span>
           {lastReadingAt ? (
-            <span className="chip">
-              Last reading{" "}
+            <span className="chip readingChip">
+              <span>Last reading</span>
               <time dateTime={new Date(lastReadingAt).toISOString()}>
                 {formatLastReading(lastReadingAt)}
               </time>

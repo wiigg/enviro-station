@@ -71,9 +71,9 @@ export function buildKpis(readings, windowId = "live") {
 
   if (!latest) {
     return [
-      { label: "PM2.5", value: "--", unit: "ug/m3", trend: "Waiting for data", state: "muted" },
-      { label: "PM10", value: "--", unit: "ug/m3", trend: "Waiting for data", state: "muted" },
-      { label: "Temp", value: "--", unit: "C", trend: "Waiting for data", state: "muted" },
+      { label: "PM2.5", value: "--", unit: "µg/m³", trend: "Waiting for data", state: "muted" },
+      { label: "PM10", value: "--", unit: "µg/m³", trend: "Waiting for data", state: "muted" },
+      { label: "Temp", value: "--", unit: "°C", trend: "Waiting for data", state: "muted" },
       { label: "Humidity", value: "--", unit: "%", trend: "Waiting for data", state: "muted" }
     ];
   }
@@ -85,22 +85,22 @@ export function buildKpis(readings, windowId = "live") {
     {
       label: "PM2.5",
       value: latest.pm2.toFixed(1),
-      unit: "ug/m3",
-      trend: metricTrend(readings, samples, latest, "pm2", "ug/m3", 1, windowId),
+      unit: "µg/m³",
+      trend: metricTrend(readings, samples, latest, "pm2", "µg/m³", 1, windowId),
       state: severityForPM25(latest.pm2)
     },
     {
       label: "PM10",
       value: latest.pm10.toFixed(1),
-      unit: "ug/m3",
-      trend: metricTrend(readings, samples, latest, "pm10", "ug/m3", 1, windowId),
+      unit: "µg/m³",
+      trend: metricTrend(readings, samples, latest, "pm10", "µg/m³", 1, windowId),
       state: severityForPM10(latest.pm10)
     },
     {
       label: "Temp",
       value: latest.temperature.toFixed(1),
-      unit: "C",
-      trend: metricTrend(readings, samples, latest, "temperature", "C", 1, windowId),
+      unit: "°C",
+      trend: metricTrend(readings, samples, latest, "temperature", "°C", 1, windowId),
       state: severityForTemperature(latest.temperature)
     },
     {

@@ -67,3 +67,9 @@ export const DASHBOARD_DEVICE_ID =
   typeof import.meta.env.VITE_DEVICE_ID === "string"
     ? import.meta.env.VITE_DEVICE_ID.trim()
     : "";
+
+export const DASHBOARD_DEVICE_LABEL =
+  typeof import.meta.env.VITE_DEVICE_LABEL === "string" &&
+  import.meta.env.VITE_DEVICE_LABEL.trim()
+    ? import.meta.env.VITE_DEVICE_LABEL.trim()
+    : DASHBOARD_DEVICE_ID || "Primary station";

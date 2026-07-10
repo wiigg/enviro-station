@@ -272,3 +272,45 @@
 .alertError {
   color: var(--alert);
 }
+
+.diagnosticsPanel details {
+  padding: 15px;
+}
+
+.diagnosticsSummary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+  cursor: pointer;
+  list-style: none;
+}
+
+.diagnosticsSummary::-webkit-details-marker {
+  display: none;
+}
+
+.diagnosticsSummary::after {
+  color: var(--muted-strong);
+  font-size: 1.1rem;
+  content: "+";
+}
+
+.diagnosticsPanel details[open] .diagnosticsSummary::after {
+  content: "−";
+}
+
+.diagnosticsTitle {
+  color: var(--text);
+  font-size: 0.92rem;
+  font-weight: 850;
+}
+
+.diagnosticsContent {
+  margin-top: 14px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}

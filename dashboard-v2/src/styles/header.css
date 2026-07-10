@@ -90,6 +90,10 @@
   background: var(--alert);
 }
 
+.readingChip {
+  gap: 4px;
+}
+
 .overviewStrip {
   display: flex;
   justify-content: space-between;

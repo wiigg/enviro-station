@@ -25,6 +25,7 @@ function renderDashboard(onSelectWindow = vi.fn()) {
       axisTickFormatter={(value) => value}
       chartData={[]}
       connectionStatus="live"
+      deviceLabel="Office"
       feedError=""
       feedItems={[]}
       insightSource="openai"
@@ -33,7 +34,7 @@ function renderDashboard(onSelectWindow = vi.fn()) {
       isLoadingFeed={false}
       isLoadingInsights={false}
       kpis={[
-        { label: "PM2.5", value: "6.0", unit: "ug/m3", trend: "Stable", state: "ok" }
+        { label: "PM2.5", value: "6.0", unit: "µg/m³", trend: "Stable", state: "ok" }
       ]}
       lastError=""
       lastReadingAt={1_800_000_000_000}
@@ -65,5 +66,7 @@ describe("DashboardView", () => {
       "true"
     );
     expect(screen.getByText(/Last reading/)).toBeInTheDocument();
+    expect(screen.getByText("Enviro Station · Office")).toBeInTheDocument();
+    expect(screen.getByText("Diagnostics").closest("details")).not.toHaveAttribute("open");
   });
 });
