@@ -8,7 +8,9 @@ vi.mock("recharts", () => ({
   LineChart: ({ children }) => <svg aria-label="Chart">{children}</svg>,
   ResponsiveContainer: ({ children }) => <div>{children}</div>,
   Tooltip: () => null,
-  XAxis: () => null,
+  XAxis: ({ type, scale }) => (
+    <g data-testid="x-axis" data-axis-type={type} data-axis-scale={scale} />
+  ),
   YAxis: () => null
 }));
 
@@ -19,11 +21,11 @@ const windowOptions = [
   { id: "7d", label: "7d" }
 ];
 
-function renderDashboard(onSelectWindow = vi.fn()) {
+function renderDashboard(onSelectWindow = vi.fn(), chartData = []) {
   render(
     <DashboardView
       axisTickFormatter={(value) => value}
-      chartData={[]}
+      chartData={chartData}
       connectionStatus="live"
       deviceLabel="Office"
       feedError=""
@@ -68,5 +70,22 @@ describe("DashboardView", () => {
     expect(screen.getByText(/Last reading/)).toBeInTheDocument();
     expect(screen.getByText("Enviro Station · Office")).toBeInTheDocument();
     expect(screen.getByText("Diagnostics").closest("details")).not.toHaveAttribute("open");
+  });
+
+  it("uses elapsed time for chart spacing", () => {
+    renderDashboard(vi.fn(), [
+      {
+        timestamp: 1_800_000_000_000,
+        pm2: 5,
+        pm2Average: 5,
+        temperature: 20,
+        temperatureAverage: 20
+      }
+    ]);
+
+    for (const axis of screen.getAllByTestId("x-axis")) {
+      expect(axis).toHaveAttribute("data-axis-type", "number");
+      expect(axis).toHaveAttribute("data-axis-scale", "time");
+    }
   });
 });

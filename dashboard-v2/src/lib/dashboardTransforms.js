@@ -1,6 +1,11 @@
 import { DASHBOARD_DEVICE_ID, LIVE_SOURCE_WINDOW_IDS } from "./dashboardConfig";
 
 const DEFAULT_DOWNSAMPLE_FIELDS = ["pm2", "temperature"];
+const PARTICULATE_MAX_FIELDS = [
+  ["pm1", "pm1Max"],
+  ["pm2", "pm2Max"],
+  ["pm10", "pm10Max"]
+];
 const CHART_AVERAGE_FIELDS = [
   { field: "pm2", outputKey: "pm2Average" },
   { field: "temperature", outputKey: "temperatureAverage" }
@@ -307,6 +312,34 @@ export function filterVisibleReadings(readings, rangeMs) {
   return readings.filter((reading) => reading.timestamp >= cutoffTimestamp);
 }
 
+function bucketReadingsByTime(readings, bucketMs) {
+  const buckets = new Map();
+
+  for (const reading of readings) {
+    const bucketId = Math.floor(reading.timestamp / bucketMs);
+    const previous = buckets.get(bucketId);
+    const next = { ...reading };
+
+    for (const [valueField, maxField] of PARTICULATE_MAX_FIELDS) {
+      next[maxField] = Math.max(
+        previous?.[maxField] ?? previous?.[valueField] ?? Number.NEGATIVE_INFINITY,
+        reading[maxField] ?? reading[valueField]
+      );
+    }
+
+    buckets.set(bucketId, next);
+  }
+
+  return Array.from(buckets.values()).sort(
+    (left, right) => left.timestamp - right.timestamp
+  );
+}
+
+function bucketSizeForWindow(windowOption) {
+  const retainedRangeMs = windowOption.retainedRangeMs ?? windowOption.rangeMs;
+  return Math.max(1_000, Math.ceil(retainedRangeMs / windowOption.queryMaxPoints));
+}
+
 export function buildHistoryUrl(backendBaseUrl, windowOption, nowMs = Date.now()) {
   const url = new URL(`${backendBaseUrl}/api/readings`);
   if (LIVE_SOURCE_WINDOW_IDS.has(windowOption.id)) {
@@ -347,10 +380,14 @@ export function mergeReadingsForWindow(readingSets, windowOption) {
   const latestTimestamp = sortedReadings[sortedReadings.length - 1].timestamp;
   const cutoffTimestamp =
     latestTimestamp - (windowOption.retainedRangeMs ?? windowOption.rangeMs);
-  return downsampleReadings(
-    sortedReadings.filter((reading) => reading.timestamp >= cutoffTimestamp),
-    windowOption.queryMaxPoints
+  const visibleReadings = sortedReadings.filter(
+    (reading) => reading.timestamp >= cutoffTimestamp
   );
+  const balancedReadings = LIVE_SOURCE_WINDOW_IDS.has(windowOption.id)
+    ? visibleReadings
+    : bucketReadingsByTime(visibleReadings, bucketSizeForWindow(windowOption));
+
+  return downsampleReadings(balancedReadings, windowOption.queryMaxPoints);
 }
 
 export function normalizeInsight(rawInsight) {

@@ -144,6 +144,9 @@ const TrendPanel = memo(function TrendPanel({
               <CartesianGrid strokeDasharray="2 6" stroke="rgba(19, 28, 43, 0.1)" />
               <XAxis
                 dataKey="timestamp"
+                type="number"
+                scale="time"
+                domain={["dataMin", "dataMax"]}
                 tickFormatter={axisTickFormatter}
                 minTickGap={26}
                 tick={AXIS_TICK_STYLE}
