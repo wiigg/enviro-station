@@ -32,11 +32,37 @@ and flushes durable batches to Postgres on a timer.
 ```bash
 cd device
 ./install.sh
-cp .env.example .env
 ```
 
 `install.sh` installs required OS packages, configures Pi interfaces, installs `uv`,
-creates `device/.venv`, and runs `uv sync`.
+creates `device/.venv`, runs `uv sync`, and enables automatic system updates. It
+creates `.env` from `.env.example` when no local environment file exists.
+
+## Automatic OS maintenance
+
+The versioned policy at `config/52envirostation-unattended-upgrades` is installed
+to `/etc/apt/apt.conf.d/` during bootstrap. It retains Debian's standard daily
+timers and additionally allows signed packages from Raspbian, Raspberry Pi, and
+the Tailscale stable repository. Package caches are cleaned weekly, obsolete
+kernels are removed, and a reboot occurs at 04:30 only when an update requires
+one and no user is logged in.
+
+Reapply the policy to an existing device without rerunning the full bootstrap:
+
+```bash
+cd device
+./configure_auto_updates.sh
+```
+
+Verify the effective schedule and policy:
+
+```bash
+systemctl list-timers apt-daily.timer apt-daily-upgrade.timer --all
+sudo unattended-upgrade --dry-run --verbose
+```
+
+Tailscale installation and Tailnet authentication remain device-specific. Once
+its stable APT repository is configured, this policy keeps Tailscale updated.
 
 ## Run manually
 

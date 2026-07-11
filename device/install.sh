@@ -19,12 +19,16 @@ sudo apt-get install -y \
   python3-dev \
   python3-pip \
   python3-venv \
+  unattended-upgrades \
   libffi-dev \
   libjpeg-dev \
   zlib1g-dev \
   libopenblas0 \
   libopenblas-dev \
   libportaudio2
+
+echo "Configuring automatic OS and Tailscale updates..."
+./configure_auto_updates.sh --skip-package-install
 
 if command -v raspi-config >/dev/null 2>&1; then
   echo "Enabling Raspberry Pi interfaces (SPI, I2C, UART)..."
