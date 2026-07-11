@@ -31,8 +31,10 @@ fi
 sudo install -o root -g root -m 0644 "$CONFIG_SOURCE" "$CONFIG_TARGET"
 sudo systemctl enable --now \
   apt-daily.timer \
-  apt-daily-upgrade.timer \
-  unattended-upgrades.service
+  apt-daily-upgrade.timer
+if ! systemctl is-active --quiet unattended-upgrades.service; then
+  sudo systemctl start unattended-upgrades.service
+fi
 
 echo "Automatic updates configured."
 systemctl list-timers apt-daily.timer apt-daily-upgrade.timer --all --no-pager
