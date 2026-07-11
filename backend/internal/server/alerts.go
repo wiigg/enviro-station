@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"strings"
+	"unicode"
 )
 
 type Alert struct {
@@ -44,6 +45,7 @@ const (
 	criticalHumidityHighThreshold    = 70.0
 	criticalTemperatureLowThreshold  = 15.0
 	criticalTemperatureHighThreshold = 30.0
+	alertMessageMaxLength            = 320
 	secondsPerMinute                 = int64(60)
 )
 
@@ -304,7 +306,7 @@ func systemPrompt(maxAlerts int, thresholds AlertThresholds) string {
 			"Use critical only for PM2.5 above %.1f ug/m3, PM10 above %.1f ug/m3, humidity below %.0f%% or at/above %.0f%%, or temperature at/below %.1fC or at/above %.1fC; otherwise use warn for noteworthy non-critical conditions. "+
 			"Use info only for neutral observations or material improvements. "+
 			"Do not use severity labels such as critical, warn, watch, or action in titles or messages; the UI displays severity separately. "+
-			"Keep title under 60 characters and message under 180 characters.",
+			"Keep title under 60 characters and message under 320 characters. End every message with a complete sentence.",
 		maxAlerts,
 		strings.Join(topics, ", "),
 		thresholds.PM2Threshold,
@@ -363,7 +365,7 @@ func alertSchema(maxAlerts int) map[string]any {
 						"message": map[string]any{
 							"type":      "string",
 							"minLength": 6,
-							"maxLength": 180,
+							"maxLength": alertMessageMaxLength,
 						},
 					},
 				},
@@ -449,7 +451,7 @@ func normalizeAlerts(
 			Kind:     kind,
 			Severity: severity,
 			Title:    trimToLength(normalizeAlertMessageForSeverity(title, severity), 60),
-			Message:  trimToLength(normalizeAlertMessageForSeverity(message, severity), 180),
+			Message:  trimToLength(normalizeAlertMessageForSeverity(message, severity), alertMessageMaxLength),
 		}
 		if topic == "general" {
 			if generalAlert == nil {
@@ -700,7 +702,7 @@ func fallbackAlertForTopic(summary alertSummary, topic string, thresholds AlertT
 						summary.Latest.PM2,
 						summary.Latest.PM10,
 					),
-					180,
+					alertMessageMaxLength,
 				),
 			}
 		}
@@ -721,7 +723,7 @@ func fallbackAlertForTopic(summary alertSummary, topic string, thresholds AlertT
 						pm2Delta,
 						pm10Delta,
 					),
-					180,
+					alertMessageMaxLength,
 				),
 			}
 		}
@@ -736,7 +738,7 @@ func fallbackAlertForTopic(summary alertSummary, topic string, thresholds AlertT
 					summary.Latest.PM2,
 					summary.Latest.PM10,
 				),
-				180,
+				alertMessageMaxLength,
 			),
 		}
 	case "humidity":
@@ -755,7 +757,7 @@ func fallbackAlertForTopic(summary alertSummary, topic string, thresholds AlertT
 						summary.Latest.Humidity,
 						delta,
 					),
-					180,
+					alertMessageMaxLength,
 				),
 			}
 		case summary.Latest.Humidity < thresholds.HumidityLowThreshold:
@@ -770,7 +772,7 @@ func fallbackAlertForTopic(summary alertSummary, topic string, thresholds AlertT
 						summary.Latest.Humidity,
 						delta,
 					),
-					180,
+					alertMessageMaxLength,
 				),
 			}
 		case delta <= -thresholds.HumidityDeltaTrigger:
@@ -785,7 +787,7 @@ func fallbackAlertForTopic(summary alertSummary, topic string, thresholds AlertT
 						math.Abs(delta),
 						summary.Latest.Humidity,
 					),
-					180,
+					alertMessageMaxLength,
 				),
 			}
 		case delta >= thresholds.HumidityDeltaTrigger:
@@ -800,7 +802,7 @@ func fallbackAlertForTopic(summary alertSummary, topic string, thresholds AlertT
 						delta,
 						summary.Latest.Humidity,
 					),
-					180,
+					alertMessageMaxLength,
 				),
 			}
 		default:
@@ -811,7 +813,7 @@ func fallbackAlertForTopic(summary alertSummary, topic string, thresholds AlertT
 				Title:    "Humidity steady",
 				Message: trimToLength(
 					fmt.Sprintf("Humidity is holding around %.0f%%.", summary.Latest.Humidity),
-					180,
+					alertMessageMaxLength,
 				),
 			}
 		}
@@ -831,7 +833,7 @@ func fallbackAlertForTopic(summary alertSummary, topic string, thresholds AlertT
 						summary.Latest.Temperature,
 						delta,
 					),
-					180,
+					alertMessageMaxLength,
 				),
 			}
 		case summary.Latest.Temperature <= thresholds.TemperatureLowThreshold:
@@ -846,7 +848,7 @@ func fallbackAlertForTopic(summary alertSummary, topic string, thresholds AlertT
 						summary.Latest.Temperature,
 						delta,
 					),
-					180,
+					alertMessageMaxLength,
 				),
 			}
 		case delta <= -thresholds.TemperatureDeltaTrigger:
@@ -861,7 +863,7 @@ func fallbackAlertForTopic(summary alertSummary, topic string, thresholds AlertT
 						math.Abs(delta),
 						summary.Latest.Temperature,
 					),
-					180,
+					alertMessageMaxLength,
 				),
 			}
 		case delta >= thresholds.TemperatureDeltaTrigger:
@@ -876,7 +878,7 @@ func fallbackAlertForTopic(summary alertSummary, topic string, thresholds AlertT
 						delta,
 						summary.Latest.Temperature,
 					),
-					180,
+					alertMessageMaxLength,
 				),
 			}
 		default:
@@ -887,7 +889,7 @@ func fallbackAlertForTopic(summary alertSummary, topic string, thresholds AlertT
 				Title:    "Temperature steady",
 				Message: trimToLength(
 					fmt.Sprintf("Temperature is holding around %.1fC.", summary.Latest.Temperature),
-					180,
+					alertMessageMaxLength,
 				),
 			}
 		}
@@ -903,10 +905,30 @@ func fallbackAlertForTopic(summary alertSummary, topic string, thresholds AlertT
 }
 
 func trimToLength(input string, maxLength int) string {
-	if len(input) <= maxLength {
-		return input
+	trimmed := strings.TrimSpace(input)
+	if maxLength <= 0 {
+		return ""
 	}
-	return strings.TrimSpace(input[:maxLength])
+
+	runes := []rune(trimmed)
+	if len(runes) <= maxLength {
+		return trimmed
+	}
+	if maxLength == 1 {
+		return "…"
+	}
+
+	cutoffRunes := runes[:maxLength-1]
+	lastSpace := -1
+	for index, character := range cutoffRunes {
+		if unicode.IsSpace(character) {
+			lastSpace = index
+		}
+	}
+	if lastSpace >= maxLength/2 {
+		cutoffRunes = cutoffRunes[:lastSpace]
+	}
+	return strings.TrimSpace(string(cutoffRunes)) + "…"
 }
 
 func fallbackStableAlert(readings []SensorReading) Alert {
@@ -927,7 +949,7 @@ func fallbackStableAlertFromSummary(summary alertSummary) Alert {
 		Kind:     "insight",
 		Severity: "info",
 		Title:    "Home conditions stable",
-		Message:  trimToLength(message, 180),
+		Message:  trimToLength(message, alertMessageMaxLength),
 	}
 }
 

@@ -255,6 +255,10 @@
   background: var(--surface-soft);
 }
 
+.insightItem > div:last-child {
+  min-width: 0;
+}
+
 .feed li {
   border-top: 1px solid var(--border);
   padding-top: 11px;
@@ -304,6 +308,11 @@
   font-size: 0.9rem;
   font-weight: 800;
   line-height: 1.35;
+}
+
+.insightTitle,
+.insightMessage {
+  overflow-wrap: anywhere;
 }
 
 .insightMessage,

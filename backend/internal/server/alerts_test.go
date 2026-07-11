@@ -3,6 +3,7 @@ package server
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestAlertSchemaRequiresAtLeastOneInsight(t *testing.T) {
@@ -134,5 +135,49 @@ func TestNormalizeAlertMessageRemovesCriticalCopyForWatchSeverity(t *testing.T) 
 	critical := normalizeAlertMessageForSeverity(message, "critical")
 	if critical != message {
 		t.Fatalf("expected critical message to remain unchanged, got %q", critical)
+	}
+}
+
+func TestNormalizeAlertsPreservesCompleteActionCopy(t *testing.T) {
+	message := "Indoor temperature is 26.8°C and rose 1.6°C in 10 minutes. Consider lowering the thermostat, increasing ventilation, or using fans to bring the room back into the comfortable 18–26°C range. Continue monitoring until it settles."
+	summary := alertSummary{
+		Latest: metricSnapshot{
+			Temperature: 26.8,
+		},
+	}
+
+	alerts := normalizeAlerts(
+		[]Alert{{
+			Topic:    "temperature",
+			Kind:     "alert",
+			Severity: "warn",
+			Title:    "Temperature slightly high",
+			Message:  message,
+		}},
+		1,
+		summary,
+		defaultAlertThresholds(),
+	)
+
+	if len(alerts) != 1 {
+		t.Fatalf("expected one alert, got %d", len(alerts))
+	}
+	if alerts[0].Message != message {
+		t.Fatalf("expected complete message, got %q", alerts[0].Message)
+	}
+}
+
+func TestTrimToLengthUsesValidUnicodeAndAVisibleEllipsis(t *testing.T) {
+	message := strings.Repeat("particulate µg/m³ improved ", 20)
+	trimmed := trimToLength(message, 80)
+
+	if !utf8.ValidString(trimmed) {
+		t.Fatalf("expected valid UTF-8, got %q", trimmed)
+	}
+	if utf8.RuneCountInString(trimmed) > 80 {
+		t.Fatalf("expected at most 80 characters, got %d", utf8.RuneCountInString(trimmed))
+	}
+	if !strings.HasSuffix(trimmed, "…") {
+		t.Fatalf("expected visible ellipsis, got %q", trimmed)
 	}
 }

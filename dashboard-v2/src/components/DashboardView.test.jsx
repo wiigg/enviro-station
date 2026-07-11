@@ -21,7 +21,7 @@ const windowOptions = [
   { id: "7d", label: "7d" }
 ];
 
-function renderDashboard(onSelectWindow = vi.fn(), chartData = []) {
+function renderDashboard(onSelectWindow = vi.fn(), chartData = [], insights = []) {
   render(
     <DashboardView
       axisTickFormatter={(value) => value}
@@ -31,7 +31,7 @@ function renderDashboard(onSelectWindow = vi.fn(), chartData = []) {
       feedError=""
       feedItems={[]}
       insightSource="openai"
-      insights={[]}
+      insights={insights}
       insightsError=""
       isLoadingFeed={false}
       isLoadingInsights={false}
@@ -93,5 +93,22 @@ describe("DashboardView", () => {
       screen.getByRole("img", { name: "Particulate trend chart" })
     ).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "Temperature trend chart" })).toBeInTheDocument();
+  });
+
+  it("renders complete long insight messages", () => {
+    const message =
+      "Indoor temperature is 26.8°C and rose 1.6°C in 10 minutes. Consider lowering the thermostat, increasing ventilation, or using fans to bring the room back into the comfortable 18–26°C range. Continue monitoring until it settles.";
+
+    renderDashboard(vi.fn(), [], [
+      {
+        id: "temperature-watch",
+        kind: "alert",
+        message,
+        severity: "warn",
+        title: "Temperature slightly high"
+      }
+    ]);
+
+    expect(screen.getByText(message)).toBeVisible();
   });
 });
