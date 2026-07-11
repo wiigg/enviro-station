@@ -3,7 +3,12 @@ try:
 except ImportError:
     import ST7735
 import os
-from pms5003 import PMS5003, ReadTimeoutError, ChecksumMismatchError
+from pms5003 import (
+    PMS5003,
+    ChecksumMismatchError,
+    ReadTimeoutError,
+    SerialTimeoutError,
+)
 from bme280 import BME280
 from enviroplus import gas
 from PIL import Image, ImageDraw, ImageFont
@@ -112,7 +117,7 @@ class DeviceInterface:
                 }
                 values.update(self.last_pm_values)
                 break  # if no exception, break the loop
-            except (ReadTimeoutError, ChecksumMismatchError):
+            except (ReadTimeoutError, SerialTimeoutError, ChecksumMismatchError):
                 logging.info("Failed to read PMS5003. Resetting and retrying.")
                 self.pms5003.reset()
         else:
