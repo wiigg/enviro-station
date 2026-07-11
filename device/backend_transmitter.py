@@ -17,9 +17,10 @@ class BackendTransmitter:
         batch_size=1000,
         timeout_seconds=5,
         max_pending=5000,
-        flush_interval_seconds=60,
-        live_interval_seconds=1,
-        live_require_subscriber=True,
+        durable_interval_seconds=60,
+        flush_interval_seconds=1800,
+        live_interval_seconds=30,
+        live_require_subscriber=False,
         live_status_interval_seconds=10,
         live_status_idle_max_seconds=900,
         device_id="default",
@@ -43,6 +44,7 @@ class BackendTransmitter:
         self.batch_size = max(1, batch_size)
         self.timeout_seconds = timeout_seconds
         self.max_pending = max(1, max_pending)
+        self.durable_interval_seconds = max(1, durable_interval_seconds)
         self.flush_interval_seconds = max(1, flush_interval_seconds)
         self.live_interval_seconds = max(0, live_interval_seconds)
         self.live_require_subscriber = live_require_subscriber
@@ -53,13 +55,25 @@ class BackendTransmitter:
         self.next_live_status_interval_seconds = self.live_status_interval_seconds
         self.pending = self._load_pending()
         self.last_flush_at = time.monotonic()
-        self.last_live_at = 0
+        self.last_durable_at = None
+        self.last_live_at = None
         self.last_live_status_at = 0
         self.live_subscribers = not live_require_subscriber
         self.live_status_checked = False
 
     def send(self, reading):
         reading = self._with_device_id(reading)
+        if self._durable_due():
+            self._queue_durable(reading)
+            self.last_durable_at = time.monotonic()
+        live_ok = True
+        if self._live_due():
+            live_ok = self._send_live_if_enabled(reading)
+        if self._flush_due():
+            return self.flush()
+        return live_ok
+
+    def _queue_durable(self, reading):
         self.pending.append(reading)
         if len(self.pending) > self.max_pending:
             drop_count = len(self.pending) - self.max_pending
@@ -67,14 +81,7 @@ class BackendTransmitter:
                 "Pending queue exceeded limit; dropping %s oldest readings", drop_count
             )
             self.pending = self.pending[drop_count:]
-
         self._persist_pending()
-        live_ok = True
-        if self._live_due():
-            live_ok = self._send_live_if_enabled(reading)
-        if self._flush_due():
-            return self.flush()
-        return live_ok
 
     def flush(self):
         if not self.pending:
@@ -100,10 +107,20 @@ class BackendTransmitter:
     def _flush_due(self):
         return time.monotonic() - self.last_flush_at >= self.flush_interval_seconds
 
+    def _durable_due(self):
+        return (
+            self.last_durable_at is None
+            or time.monotonic() - self.last_durable_at
+            >= self.durable_interval_seconds
+        )
+
     def _live_due(self):
         if self.live_interval_seconds == 0:
             return False
-        return time.monotonic() - self.last_live_at >= self.live_interval_seconds
+        return (
+            self.last_live_at is None
+            or time.monotonic() - self.last_live_at >= self.live_interval_seconds
+        )
 
     def _send_live_if_enabled(self, reading):
         if not self._live_allowed():

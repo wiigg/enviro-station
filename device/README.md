@@ -13,9 +13,10 @@ and flushes durable batches to Postgres on a timer.
 - `DEVICE_QUEUE_FILE` (default: `pending_readings.json`)
 - `DEVICE_READ_INTERVAL_SECONDS` (default: `1`)
 - `DEVICE_BATCH_SIZE` (default: `1000`)
-- `DEVICE_FLUSH_INTERVAL_SECONDS` (default: `60`)
-- `DEVICE_LIVE_INTERVAL_SECONDS` (default: `1`; set `0` to disable live posts)
-- `DEVICE_LIVE_REQUIRE_SUBSCRIBER` (default: `true`; only live-post when a dashboard stream is connected)
+- `DEVICE_DURABLE_INTERVAL_SECONDS` (default: `60`; interval between locally queued durable samples)
+- `DEVICE_FLUSH_INTERVAL_SECONDS` (default: `1800`; interval between durable batch uploads)
+- `DEVICE_LIVE_INTERVAL_SECONDS` (default: `30`; set `0` to disable live posts)
+- `DEVICE_LIVE_REQUIRE_SUBSCRIBER` (default: `false`; optionally only live-post when a dashboard stream is connected)
 - `DEVICE_LIVE_STATUS_INTERVAL_SECONDS` (default: `10`; active/minimum subscriber check interval)
 - `DEVICE_LIVE_STATUS_IDLE_MAX_SECONDS` (default: `900`; max idle subscriber-check backoff)
 - `DEVICE_HTTP_TIMEOUT_SECONDS` (default: `5`)
@@ -45,14 +46,17 @@ uv run python main.py
 ```
 
 `main.py` loads configuration from `.env`.
-Each reading is queued locally. Durable writes flush every 60 seconds by default
-so newly opened dashboards do not wait long for recent persisted history. Live
-updates are rate-limited separately and, by default, are only posted while a
-dashboard stream is connected.
-When no dashboard is connected, subscriber checks back off exponentially up to
-`DEVICE_LIVE_STATUS_IDLE_MAX_SECONDS` so Fly can stop between idle wakeups.
-When a dashboard stream is detected, live posts use `DEVICE_LIVE_INTERVAL_SECONDS`
-for realtime updates.
+The sensor and display update every second, but transmission uses two independent
+cadences. Live readings post every 30 seconds to the backend's in-memory stream;
+they do not write to Postgres. One reading per minute is queued locally for
+durable history, and those readings are uploaded in a batch every 30 minutes.
+This produces about 2,880 small live requests, 1,440 durable rows, and 48 durable
+batch uploads per day.
+
+Subscriber gating is optional. If `DEVICE_LIVE_REQUIRE_SUBSCRIBER=true`, status
+checks back off exponentially up to `DEVICE_LIVE_STATUS_IDLE_MAX_SECONDS` while
+no dashboard is connected. The default keeps gating disabled so a newly opened
+dashboard always has a recent live reading.
 Readings include the Raspberry Pi serial number as `device_id` so backend batch
 retries are idempotent per device.
 Durable writes are queued locally and flushed to Postgres in timed batches.

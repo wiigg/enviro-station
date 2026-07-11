@@ -43,12 +43,13 @@ def main():
     batch_size = env_int("DEVICE_BATCH_SIZE", 1000)
     timeout_seconds = env_int("DEVICE_HTTP_TIMEOUT_SECONDS", 5)
     max_pending = env_int("DEVICE_MAX_PENDING", 5000)
-    flush_interval_seconds = env_int("DEVICE_FLUSH_INTERVAL_SECONDS", 60)
+    durable_interval_seconds = env_int("DEVICE_DURABLE_INTERVAL_SECONDS", 60)
+    flush_interval_seconds = env_int("DEVICE_FLUSH_INTERVAL_SECONDS", 1800)
     read_interval_seconds = env_int("DEVICE_READ_INTERVAL_SECONDS", UPDATE_INTERVAL)
-    live_interval_seconds = env_int("DEVICE_LIVE_INTERVAL_SECONDS", 1)
+    live_interval_seconds = env_int("DEVICE_LIVE_INTERVAL_SECONDS", 30)
     live_status_interval_seconds = env_int("DEVICE_LIVE_STATUS_INTERVAL_SECONDS", 10)
     live_status_idle_max_seconds = env_int("DEVICE_LIVE_STATUS_IDLE_MAX_SECONDS", 900)
-    live_require_subscriber = env_bool("DEVICE_LIVE_REQUIRE_SUBSCRIBER", True)
+    live_require_subscriber = env_bool("DEVICE_LIVE_REQUIRE_SUBSCRIBER", False)
     logging.basicConfig(level=logging.INFO)
 
     # Log Raspberry Pi serial and Wi-Fi status
@@ -66,6 +67,7 @@ def main():
         batch_size=batch_size,
         timeout_seconds=timeout_seconds,
         max_pending=max_pending,
+        durable_interval_seconds=durable_interval_seconds,
         flush_interval_seconds=flush_interval_seconds,
         live_interval_seconds=live_interval_seconds,
         live_require_subscriber=live_require_subscriber,

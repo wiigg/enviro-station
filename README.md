@@ -8,8 +8,8 @@ Enviro Station is an air quality monitoring platform with three services:
 
 ## Architecture
 
-1. Device reads Enviro+ sensors and publishes live readings to the backend stream while a dashboard is connected.
-2. Device batches durable uploads so the backend writes to Postgres less often.
+1. Device reads Enviro+ sensors every second and publishes in-memory live readings every 30 seconds.
+2. Device retains one durable sample per minute and flushes those samples to Postgres every 30 minutes.
 3. Dashboard uses the live stream for realtime updates and device-scoped Postgres buckets for longer-range history.
 4. If Postgres is down, the backend can still boot in live-only mode and retry durable storage later.
 

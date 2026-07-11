@@ -21,6 +21,15 @@ describe("resolveConnectionStatus", () => {
         previousStatus: "live",
         now: NOW
       })
+    ).toBe("live");
+
+    expect(
+      resolveConnectionStatus({
+        isStreamConnected: true,
+        latestReadingAt: NOW - 120_000,
+        previousStatus: "live",
+        now: NOW
+      })
     ).toBe("offline");
 
     expect(
