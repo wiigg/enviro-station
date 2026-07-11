@@ -13,7 +13,6 @@ export function useInsightsData(backendBaseUrl) {
   const [insights, setInsights] = useState([]);
   const [insightsError, setInsightsError] = useState("");
   const [isLoadingInsights, setIsLoadingInsights] = useState(true);
-  const [insightSource, setInsightSource] = useState("openai");
   const [insightGeneratedAt, setInsightGeneratedAt] = useState(null);
   const [insightTrigger, setInsightTrigger] = useState("");
 
@@ -39,12 +38,10 @@ export function useInsightsData(backendBaseUrl) {
           .map(normalizeInsight)
           .filter(Boolean)
           .slice(0, INSIGHT_MAX_ITEMS);
-        const nextSource = typeof payload.source === "string" ? payload.source : "openai";
         const generatedAt = Number(payload.generated_at);
         const trigger = typeof payload.trigger === "string" ? payload.trigger : "";
 
         setInsights(nextInsights);
-        setInsightSource(nextSource);
         setInsightGeneratedAt(Number.isFinite(generatedAt) ? generatedAt : null);
         setInsightTrigger(trigger);
         setInsightsError("");
@@ -71,7 +68,6 @@ export function useInsightsData(backendBaseUrl) {
     insightsError,
     insightGeneratedAt,
     isLoadingInsights,
-    insightSource,
     insightTrigger
   };
 }

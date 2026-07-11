@@ -9,7 +9,6 @@ function diagnostics(overrides = {}) {
     feedError: "",
     feedItems: [],
     insightGeneratedAt: now - 60_000,
-    insightSource: "openai",
     insightTrigger: "event",
     insights: [{ id: "insight-1" }],
     insightsError: "",

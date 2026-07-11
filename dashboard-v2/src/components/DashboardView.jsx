@@ -15,7 +15,6 @@ export default function DashboardView({
   diagnosticsTone,
   feedError,
   feedItems,
-  insightSource,
   insights,
   insightsError,
   isLoadingFeed,
@@ -55,7 +54,6 @@ export default function DashboardView({
 
         <section className="intelligenceSection reveal" aria-label="Insights and diagnostics">
           <InsightsCard
-            insightSource={insightSource}
             insights={insights}
             insightsError={insightsError}
             isLoadingInsights={isLoadingInsights}

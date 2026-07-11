@@ -31,7 +31,6 @@ function insightKindLabel(kind) {
 }
 
 export default memo(function InsightsCard({
-  insightSource,
   insights,
   insightsError,
   isLoadingInsights,
@@ -41,7 +40,6 @@ export default memo(function InsightsCard({
     <aside className="card panel insightsPanel">
       <div className="panelHead">
         <h2>AI insights</h2>
-        <span>{insightSource}</span>
       </div>
       {isLoadingInsights && insights.length === 0 ? (
         <p className="emptyState" role="status">

@@ -41,7 +41,6 @@ function renderDashboard(onSelectWindow = vi.fn(), chartData = [], insights = []
       diagnosticsTone="ok"
       feedError=""
       feedItems={[]}
-      insightSource="openai"
       insights={insights}
       insightsError=""
       isLoadingFeed={false}

@@ -76,7 +76,6 @@ export function useDashboardData() {
     insightsError,
     insightGeneratedAt,
     isLoadingInsights,
-    insightSource,
     insightTrigger
   } = useInsightsData(backendBaseUrl);
   const { feedItems, feedError, isLoadingFeed } = useOpsFeedData(backendBaseUrl);
@@ -106,7 +105,6 @@ export function useDashboardData() {
         feedError,
         feedItems,
         insightGeneratedAt,
-        insightSource,
         insightTrigger,
         insights: alignedInsights,
         insightsError,
@@ -121,7 +119,6 @@ export function useDashboardData() {
       feedError,
       feedItems,
       insightGeneratedAt,
-      insightSource,
       insightTrigger,
       insightsError,
       isLoadingFeed,
@@ -172,7 +169,6 @@ export function useDashboardData() {
     deviceLabel: DASHBOARD_DEVICE_LABEL,
     feedError,
     feedItems,
-    insightSource,
     insights: alignedInsights,
     insightsError,
     isLoadingFeed,

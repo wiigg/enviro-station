@@ -87,7 +87,6 @@ function insightTriggerLabel(trigger) {
 
 function buildInsightsCheck({
   insightGeneratedAt,
-  insightSource,
   insightTrigger,
   insights,
   insightsError,
@@ -100,7 +99,7 @@ function buildInsightsCheck({
       label: "AI insights",
       state: "warn",
       summary: "Insights are unavailable; live monitoring is unaffected.",
-      action: "Check the backend AI logs and OpenAI configuration if this persists."
+      action: "Check the backend AI logs and configuration if this persists."
     };
   }
   if (isLoadingInsights && !insights.length) {
@@ -147,7 +146,7 @@ function buildInsightsCheck({
     id: "insights",
     label: "AI insights",
     state: "ok",
-    summary: `${insightSource === "openai" ? "OpenAI ready" : "Insights ready"}${updated}${reason}.`,
+    summary: `Insights ready${updated}${reason}.`,
     action: ""
   };
 }
@@ -189,7 +188,6 @@ export function buildDashboardDiagnostics({
   feedError,
   feedItems,
   insightGeneratedAt,
-  insightSource,
   insightTrigger,
   insights,
   insightsError,
@@ -203,7 +201,6 @@ export function buildDashboardDiagnostics({
     buildTelemetryCheck({ connectionStatus, lastError, lastReadingAt, now }),
     buildInsightsCheck({
       insightGeneratedAt,
-      insightSource,
       insightTrigger,
       insights,
       insightsError,
