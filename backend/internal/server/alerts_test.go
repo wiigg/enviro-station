@@ -40,7 +40,7 @@ func TestAlertSchemaRequiresAtLeastOneInsight(t *testing.T) {
 func TestFallbackStableAlertProducesInsight(t *testing.T) {
 	alert := fallbackStableAlert([]SensorReading{
 		{
-			Timestamp:   1738886400000,
+			Timestamp:   1738886400,
 			Temperature: 22.3,
 			Humidity:    41.2,
 			PM2:         3.5,
@@ -59,6 +59,25 @@ func TestFallbackStableAlertProducesInsight(t *testing.T) {
 	}
 	if strings.TrimSpace(alert.Message) == "" {
 		t.Fatalf("expected non-empty message")
+	}
+}
+
+func TestBuildAlertSummaryUsesUnixSecondsForWindows(t *testing.T) {
+	baseTimestamp := int64(1738886400)
+	summary := buildAlertSummary([]SensorReading{
+		{Timestamp: baseTimestamp, PM2: 1},
+		{Timestamp: baseTimestamp + 10*secondsPerMinute, PM2: 4},
+		{Timestamp: baseTimestamp + 20*secondsPerMinute, PM2: 10},
+	})
+
+	if summary.WindowMin != 20 {
+		t.Fatalf("expected a 20 minute window, got %d", summary.WindowMin)
+	}
+	if summary.Delta10m.PM2 != 6 {
+		t.Fatalf("expected 10 minute PM2 delta 6, got %.1f", summary.Delta10m.PM2)
+	}
+	if summary.Delta60m.PM2 != 9 {
+		t.Fatalf("expected 60 minute PM2 delta to use oldest sample, got %.1f", summary.Delta60m.PM2)
 	}
 }
 

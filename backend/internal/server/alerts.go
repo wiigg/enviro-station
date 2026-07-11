@@ -44,6 +44,7 @@ const (
 	criticalHumidityHighThreshold    = 70.0
 	criticalTemperatureLowThreshold  = 15.0
 	criticalTemperatureHighThreshold = 30.0
+	secondsPerMinute                 = int64(60)
 )
 
 func defaultAlertThresholds() AlertThresholds {
@@ -954,7 +955,7 @@ func buildAlertSummary(readings []SensorReading) alertSummary {
 	oldest := readings[0]
 	windowMin := int64(0)
 	if latest.Timestamp > oldest.Timestamp {
-		windowMin = (latest.Timestamp - oldest.Timestamp) / 60000
+		windowMin = (latest.Timestamp - oldest.Timestamp) / secondsPerMinute
 	}
 
 	return alertSummary{
@@ -1052,7 +1053,7 @@ func deltaAtMinutes(
 	}
 
 	latest := readings[len(readings)-1]
-	target := latest.Timestamp - (minutes * 60 * 1000)
+	target := latest.Timestamp - (minutes * secondsPerMinute)
 	reference := readings[0]
 
 	for index := len(readings) - 1; index >= 0; index-- {
