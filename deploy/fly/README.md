@@ -63,15 +63,15 @@ cd ..
 
 ## Device Settings
 
-For near-realtime dashboard recovery while keeping write volume batched, keep:
+For fresh live readings without keeping Neon active, keep:
 
 ```dotenv
-DEVICE_LIVE_REQUIRE_SUBSCRIBER=true
-DEVICE_LIVE_INTERVAL_SECONDS=1
-DEVICE_LIVE_STATUS_INTERVAL_SECONDS=10
-DEVICE_LIVE_STATUS_IDLE_MAX_SECONDS=900
-DEVICE_FLUSH_INTERVAL_SECONDS=60
+DEVICE_LIVE_REQUIRE_SUBSCRIBER=false
+DEVICE_LIVE_INTERVAL_SECONDS=30
+DEVICE_DURABLE_INTERVAL_SECONDS=60
+DEVICE_FLUSH_INTERVAL_SECONDS=1800
 ```
 
-Increasing `DEVICE_LIVE_STATUS_IDLE_MAX_SECONDS` reduces idle API traffic further
-at the cost of taking longer for the device to discover a newly opened dashboard.
+Live posts only update the backend's in-memory stream. Durable samples are queued
+locally once per minute and uploaded to Postgres in 30-minute batches, allowing
+Neon compute to return to idle between writes.
