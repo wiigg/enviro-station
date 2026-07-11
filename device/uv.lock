@@ -88,7 +88,7 @@ dependencies = [
 requires-dist = [
     { name = "enviroplus", specifier = ">=1.0.2" },
     { name = "pillow", specifier = ">=12.1.1" },
-    { name = "python-dotenv", specifier = ">=1.2.1" },
+    { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "smbus2", specifier = ">=0.6.0" },
 ]
 
