@@ -32,15 +32,12 @@ func (hub *streamHub) subscribe(deviceID string) (chan SensorReading, func()) {
 
 func (hub *streamHub) publish(reading SensorReading) {
 	hub.mu.RLock()
-	subscribers := make([]chan SensorReading, 0, len(hub.subscribers))
-	for subscriber, deviceID := range hub.subscribers {
-		if deviceID == "" || deviceID == reading.DeviceID {
-			subscribers = append(subscribers, subscriber)
-		}
-	}
-	hub.mu.RUnlock()
+	defer hub.mu.RUnlock()
 
-	for _, subscriber := range subscribers {
+	for subscriber, deviceID := range hub.subscribers {
+		if deviceID != "" && deviceID != reading.DeviceID {
+			continue
+		}
 		select {
 		case subscriber <- reading:
 		default:
