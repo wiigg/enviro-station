@@ -71,24 +71,31 @@ func cloneAlerts(alerts []Alert) []Alert {
 }
 
 type openAIAlertAnalyzer struct {
-	httpClient *http.Client
-	baseURL    string
-	apiKey     string
-	model      string
-	maxAlerts  int
-	thresholds AlertThresholds
+	httpClient      *http.Client
+	baseURL         string
+	apiKey          string
+	model           string
+	reasoningEffort string
+	maxAlerts       int
+	thresholds      AlertThresholds
 }
 
 func NewOpenAIAlertAnalyzer(
 	apiKey string,
 	model string,
+	reasoningEffort string,
 	baseURL string,
 	maxAlerts int,
 	thresholds AlertThresholds,
 ) AlertAnalyzer {
 	trimmedModel := strings.TrimSpace(model)
 	if trimmedModel == "" {
-		trimmedModel = "gpt-5-mini"
+		trimmedModel = "gpt-5.6-terra"
+	}
+
+	trimmedReasoningEffort := strings.TrimSpace(reasoningEffort)
+	if trimmedReasoningEffort == "" {
+		trimmedReasoningEffort = "low"
 	}
 
 	trimmedBaseURL := strings.TrimSpace(baseURL)
@@ -138,12 +145,13 @@ func NewOpenAIAlertAnalyzer(
 
 	return &openAIAlertAnalyzer{
 		// Request deadline is controlled by the caller context timeout.
-		httpClient: &http.Client{},
-		baseURL:    strings.TrimRight(trimmedBaseURL, "/"),
-		apiKey:     strings.TrimSpace(apiKey),
-		model:      trimmedModel,
-		maxAlerts:  maxAlerts,
-		thresholds: normalizedThresholds,
+		httpClient:      &http.Client{},
+		baseURL:         strings.TrimRight(trimmedBaseURL, "/"),
+		apiKey:          strings.TrimSpace(apiKey),
+		model:           trimmedModel,
+		reasoningEffort: trimmedReasoningEffort,
+		maxAlerts:       maxAlerts,
+		thresholds:      normalizedThresholds,
 	}
 }
 
@@ -168,6 +176,9 @@ func (analyzer *openAIAlertAnalyzer) Analyze(
 
 	requestPayload := map[string]any{
 		"model": analyzer.model,
+		"reasoning": map[string]any{
+			"effort": analyzer.reasoningEffort,
+		},
 		"input": []map[string]any{
 			{
 				"role": "system",

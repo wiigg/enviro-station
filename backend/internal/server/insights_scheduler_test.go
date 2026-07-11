@@ -24,6 +24,97 @@ func testInsightsSchedulerConfig() InsightsSchedulerConfig {
 	}
 }
 
+func TestFirstReadingRequestsWarmupWithoutReportingAnEvent(t *testing.T) {
+	scheduler := NewInsightsScheduler(&fakeStore{}, &fakeAlertAnalyzer{}, testInsightsSchedulerConfig())
+
+	trigger := scheduler.triggerFromReading(SensorReading{
+		Timestamp:   1738886400,
+		Temperature: 22,
+		Humidity:    45,
+		PM2:         3,
+		PM10:        5,
+	})
+
+	if trigger != "warmup" {
+		t.Fatalf("expected first reading to warm insights, got %q", trigger)
+	}
+}
+
+func TestShouldTriggerFromReadingUsesRollingTenMinuteChange(t *testing.T) {
+	scheduler := NewInsightsScheduler(&fakeStore{}, &fakeAlertAnalyzer{}, testInsightsSchedulerConfig())
+	baseTimestamp := int64(1738886400)
+
+	scheduler.shouldTriggerFromReading(SensorReading{Timestamp: baseTimestamp, PM2: 2, PM10: 4})
+	if scheduler.shouldTriggerFromReading(SensorReading{Timestamp: baseTimestamp + 3*60, PM2: 4, PM10: 4}) {
+		t.Fatalf("expected small partial PM2 change not to trigger")
+	}
+	if scheduler.shouldTriggerFromReading(SensorReading{Timestamp: baseTimestamp + 6*60, PM2: 6, PM10: 4}) {
+		t.Fatalf("expected cumulative PM2 change below threshold not to trigger")
+	}
+	if !scheduler.shouldTriggerFromReading(SensorReading{Timestamp: baseTimestamp + 9*60, PM2: 7.2, PM10: 4}) {
+		t.Fatalf("expected cumulative PM2 change over ten-minute window to trigger")
+	}
+}
+
+func TestShouldTriggerFromReadingIgnoresDelayedReadings(t *testing.T) {
+	scheduler := NewInsightsScheduler(&fakeStore{}, &fakeAlertAnalyzer{}, testInsightsSchedulerConfig())
+	baseTimestamp := int64(1738886400)
+
+	scheduler.shouldTriggerFromReading(SensorReading{Timestamp: baseTimestamp, PM2: 3, PM10: 5})
+	if scheduler.shouldTriggerFromReading(SensorReading{Timestamp: baseTimestamp - 60, PM2: 30, PM10: 50}) {
+		t.Fatalf("expected delayed reading not to trigger")
+	}
+	if scheduler.lastReading.Timestamp != baseTimestamp {
+		t.Fatalf("expected delayed reading not to rewind baseline, got %d", scheduler.lastReading.Timestamp)
+	}
+	if scheduler.shouldTriggerFromReading(SensorReading{Timestamp: baseTimestamp + 60, PM2: 3.2, PM10: 5.1}) {
+		t.Fatalf("expected stable reading after delayed batch not to trigger")
+	}
+}
+
+func TestSeverityEscalationBypassesMaterialChangeCooldown(t *testing.T) {
+	config := testInsightsSchedulerConfig()
+	config.PM2Threshold = 8
+	scheduler := NewInsightsScheduler(&fakeStore{}, &fakeAlertAnalyzer{}, config)
+	baseTimestamp := int64(1738886400)
+
+	scheduler.shouldTriggerFromReading(SensorReading{Timestamp: baseTimestamp, PM2: 7, PM10: 5})
+	if !scheduler.shouldTriggerFromReading(SensorReading{Timestamp: baseTimestamp + 60, PM2: 8.1, PM10: 5}) {
+		t.Fatalf("expected warning threshold crossing to trigger")
+	}
+	if !scheduler.shouldTriggerFromReading(SensorReading{Timestamp: baseTimestamp + 120, PM2: 15.1, PM10: 5}) {
+		t.Fatalf("expected critical escalation inside cooldown to trigger")
+	}
+}
+
+func TestNeedsScheduledRefreshUsesSnapshotAge(t *testing.T) {
+	scheduler := NewInsightsScheduler(&fakeStore{}, &fakeAlertAnalyzer{}, testInsightsSchedulerConfig())
+	now := time.Now()
+	scheduler.hasSnapshot = true
+	scheduler.snapshot.GeneratedAt = now.UnixMilli()
+
+	if scheduler.needsScheduledRefresh(now) {
+		t.Fatalf("expected fresh event snapshot to defer scheduled refresh")
+	}
+	scheduler.snapshot.GeneratedAt = now.Add(-scheduler.config.RefreshInterval).UnixMilli()
+	if !scheduler.needsScheduledRefresh(now) {
+		t.Fatalf("expected expired snapshot to require scheduled refresh")
+	}
+}
+
+func TestIntervalRecomputeSkipsUnchangedTelemetry(t *testing.T) {
+	store := &fakeStore{latest: []SensorReading{{Timestamp: 1738886400, PM2: 3, PM10: 5}}}
+	analyzer := &fakeAlertAnalyzer{}
+	scheduler := NewInsightsScheduler(store, analyzer, testInsightsSchedulerConfig())
+
+	scheduler.recompute("startup")
+	scheduler.recompute("interval")
+
+	if analyzer.calls != 1 {
+		t.Fatalf("expected unchanged scheduled refresh to skip analysis, got %d calls", analyzer.calls)
+	}
+}
+
 func TestShouldTriggerFromReadingPM2IncreaseJump(t *testing.T) {
 	scheduler := NewInsightsScheduler(&fakeStore{}, &fakeAlertAnalyzer{}, testInsightsSchedulerConfig())
 

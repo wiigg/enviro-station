@@ -34,6 +34,8 @@ type insightsAnalysisSource string
 const (
 	insightsAnalysisSourceDurable insightsAnalysisSource = "durable"
 	insightsAnalysisSourceLive    insightsAnalysisSource = "live"
+	insightsTrendWindow                                  = 10 * time.Minute
+	insightsScheduleCheckInterval                        = 5 * time.Minute
 )
 
 type InsightsSchedulerOption func(*InsightsScheduler)
@@ -64,7 +66,7 @@ type InsightsSchedulerConfig struct {
 func DefaultInsightsSchedulerConfig() InsightsSchedulerConfig {
 	return InsightsSchedulerConfig{
 		AnalysisLimit:            900,
-		RefreshInterval:          time.Hour,
+		RefreshInterval:          6 * time.Hour,
 		EventMinInterval:         10 * time.Minute,
 		PM2Threshold:             8.0,
 		PM10Threshold:            30.0,
@@ -87,14 +89,16 @@ type InsightsScheduler struct {
 	config        InsightsSchedulerConfig
 	liveReadings  func(limit int) []SensorReading
 
-	mu                 sync.RWMutex
-	snapshot           InsightsSnapshot
-	hasSnapshot        bool
-	lastReading        *SensorReading
-	lastEventTrigger   time.Time
-	lastEventDirection string
-	running            bool
-	pending            bool
+	mu                   sync.RWMutex
+	snapshot             InsightsSnapshot
+	hasSnapshot          bool
+	lastReading          *SensorReading
+	recentReadings       []SensorReading
+	lastAnalyzedSampleAt int64
+	lastEventTrigger     time.Time
+	lastEventDirection   string
+	running              bool
+	pendingTrigger       string
 }
 
 func NewInsightsScheduler(
@@ -168,10 +172,16 @@ func NewInsightsScheduler(
 
 func (scheduler *InsightsScheduler) Start(ctx context.Context) {
 	scheduler.loadSnapshotFromStore()
-	scheduler.requestRecompute("startup")
+	if scheduler.needsScheduledRefresh(time.Now()) {
+		scheduler.requestRecompute("startup")
+	}
 
 	go func() {
-		ticker := time.NewTicker(scheduler.config.RefreshInterval)
+		checkInterval := scheduler.config.RefreshInterval
+		if checkInterval > insightsScheduleCheckInterval {
+			checkInterval = insightsScheduleCheckInterval
+		}
+		ticker := time.NewTicker(checkInterval)
 		defer ticker.Stop()
 
 		for {
@@ -179,10 +189,24 @@ func (scheduler *InsightsScheduler) Start(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				scheduler.requestRecompute("interval")
+				if scheduler.needsScheduledRefresh(time.Now()) {
+					scheduler.requestRecompute("interval")
+				}
 			}
 		}
 	}()
+}
+
+func (scheduler *InsightsScheduler) needsScheduledRefresh(now time.Time) bool {
+	scheduler.mu.RLock()
+	defer scheduler.mu.RUnlock()
+
+	if !scheduler.hasSnapshot || scheduler.snapshot.GeneratedAt <= 0 {
+		return true
+	}
+
+	generatedAt := time.UnixMilli(scheduler.snapshot.GeneratedAt)
+	return !now.Before(generatedAt.Add(scheduler.config.RefreshInterval))
 }
 
 func (scheduler *InsightsScheduler) loadSnapshotFromStore() {
@@ -236,22 +260,27 @@ func (scheduler *InsightsScheduler) Snapshot(limit int) (InsightsSnapshot, bool)
 }
 
 func (scheduler *InsightsScheduler) OnReading(reading SensorReading) {
-	if !scheduler.shouldTriggerFromReading(reading) {
+	trigger := scheduler.triggerFromReading(reading)
+	if trigger == "" {
 		return
 	}
-	scheduler.requestRecompute("event")
+	scheduler.requestRecompute(trigger)
 }
 
 func (scheduler *InsightsScheduler) OnBatch(readings []SensorReading) {
 	for _, reading := range readings {
-		if scheduler.shouldTriggerFromReading(reading) {
-			scheduler.requestRecompute("event")
+		if trigger := scheduler.triggerFromReading(reading); trigger != "" {
+			scheduler.requestRecompute(trigger)
 			return
 		}
 	}
 }
 
 func (scheduler *InsightsScheduler) shouldTriggerFromReading(reading SensorReading) bool {
+	return scheduler.triggerFromReading(reading) == "event"
+}
+
+func (scheduler *InsightsScheduler) triggerFromReading(reading SensorReading) string {
 	now := time.Now()
 
 	scheduler.mu.Lock()
@@ -260,15 +289,30 @@ func (scheduler *InsightsScheduler) shouldTriggerFromReading(reading SensorReadi
 	if scheduler.lastReading == nil {
 		latest := reading
 		scheduler.lastReading = &latest
-		return false
+		scheduler.recentReadings = []SensorReading{reading}
+		if !scheduler.hasSnapshot {
+			return "warmup"
+		}
+		return ""
 	}
 
 	previous := *scheduler.lastReading
+	if readingsFromDifferentDevices(previous, reading) {
+		latest := reading
+		scheduler.lastReading = &latest
+		scheduler.recentReadings = []SensorReading{reading}
+		return ""
+	}
+	if reading.Timestamp <= previous.Timestamp {
+		return ""
+	}
+
 	latest := reading
 	scheduler.lastReading = &latest
+	windowReference := scheduler.recordRecentReading(reading)
 
-	pm2Delta := reading.PM2 - previous.PM2
-	pm10Delta := reading.PM10 - previous.PM10
+	pm2Delta := reading.PM2 - windowReference.PM2
+	pm10Delta := reading.PM10 - windowReference.PM10
 	pm2SeverityChange := severityChange(
 		pmSeverity(previous.PM2, scheduler.config.PM2Threshold, criticalPM2Threshold),
 		pmSeverity(reading.PM2, scheduler.config.PM2Threshold, criticalPM2Threshold),
@@ -285,6 +329,10 @@ func (scheduler *InsightsScheduler) shouldTriggerFromReading(reading SensorReadi
 		temperatureSeverity(previous.Temperature, scheduler.config.TemperatureLowThreshold, scheduler.config.TemperatureHighThreshold),
 		temperatureSeverity(reading.Temperature, scheduler.config.TemperatureLowThreshold, scheduler.config.TemperatureHighThreshold),
 	)
+	severityChanged := pm2SeverityChange != 0 ||
+		pm10SeverityChange != 0 ||
+		humiditySeverityChange != 0 ||
+		temperatureSeverityChange != 0
 
 	worsening := pm2SeverityChange > 0 ||
 		pm10SeverityChange > 0 ||
@@ -292,19 +340,19 @@ func (scheduler *InsightsScheduler) shouldTriggerFromReading(reading SensorReadi
 		temperatureSeverityChange > 0 ||
 		pm2Delta >= scheduler.config.PM2DeltaTrigger ||
 		pm10Delta >= scheduler.config.PM10DeltaTrigger ||
-		movedFurtherFromComfort(previous.Humidity, reading.Humidity, scheduler.config.HumidityLowThreshold, scheduler.config.HumidityHighThreshold, scheduler.config.HumidityDeltaTrigger) ||
-		movedFurtherFromComfort(previous.Temperature, reading.Temperature, scheduler.config.TemperatureLowThreshold, scheduler.config.TemperatureHighThreshold, scheduler.config.TemperatureDeltaTrigger)
+		movedFurtherFromComfort(windowReference.Humidity, reading.Humidity, scheduler.config.HumidityLowThreshold, scheduler.config.HumidityHighThreshold, scheduler.config.HumidityDeltaTrigger) ||
+		movedFurtherFromComfort(windowReference.Temperature, reading.Temperature, scheduler.config.TemperatureLowThreshold, scheduler.config.TemperatureHighThreshold, scheduler.config.TemperatureDeltaTrigger)
 	improving := pm2SeverityChange < 0 ||
 		pm10SeverityChange < 0 ||
 		humiditySeverityChange < 0 ||
 		temperatureSeverityChange < 0 ||
 		pm2Delta <= -scheduler.config.PM2DeltaTrigger ||
 		pm10Delta <= -scheduler.config.PM10DeltaTrigger ||
-		movedTowardComfort(previous.Humidity, reading.Humidity, scheduler.config.HumidityLowThreshold, scheduler.config.HumidityHighThreshold, scheduler.config.HumidityDeltaTrigger) ||
-		movedTowardComfort(previous.Temperature, reading.Temperature, scheduler.config.TemperatureLowThreshold, scheduler.config.TemperatureHighThreshold, scheduler.config.TemperatureDeltaTrigger)
+		movedTowardComfort(windowReference.Humidity, reading.Humidity, scheduler.config.HumidityLowThreshold, scheduler.config.HumidityHighThreshold, scheduler.config.HumidityDeltaTrigger) ||
+		movedTowardComfort(windowReference.Temperature, reading.Temperature, scheduler.config.TemperatureLowThreshold, scheduler.config.TemperatureHighThreshold, scheduler.config.TemperatureDeltaTrigger)
 
 	if !(worsening || improving) {
-		return false
+		return ""
 	}
 
 	eventDirection := "mixed"
@@ -315,15 +363,36 @@ func (scheduler *InsightsScheduler) shouldTriggerFromReading(reading SensorReadi
 		eventDirection = "improving"
 	}
 
-	if !scheduler.lastEventTrigger.IsZero() &&
+	if !severityChanged &&
+		!scheduler.lastEventTrigger.IsZero() &&
 		now.Sub(scheduler.lastEventTrigger) < scheduler.config.EventMinInterval &&
 		scheduler.lastEventDirection == eventDirection {
-		return false
+		return ""
 	}
 
 	scheduler.lastEventTrigger = now
 	scheduler.lastEventDirection = eventDirection
-	return true
+	return "event"
+}
+
+func readingsFromDifferentDevices(previous, current SensorReading) bool {
+	return previous.DeviceID != "" && current.DeviceID != "" && previous.DeviceID != current.DeviceID
+}
+
+func (scheduler *InsightsScheduler) recordRecentReading(reading SensorReading) SensorReading {
+	scheduler.recentReadings = append(scheduler.recentReadings, reading)
+	cutoff := reading.Timestamp - int64(insightsTrendWindow/time.Second)
+	referenceIndex := 0
+	for index, candidate := range scheduler.recentReadings {
+		if candidate.Timestamp > cutoff {
+			break
+		}
+		referenceIndex = index
+	}
+	if referenceIndex > 0 {
+		scheduler.recentReadings = scheduler.recentReadings[referenceIndex:]
+	}
+	return scheduler.recentReadings[0]
 }
 
 type metricSeverity int
@@ -390,7 +459,9 @@ func comfortDistance(value, low, high float64) float64 {
 func (scheduler *InsightsScheduler) requestRecompute(trigger string) {
 	scheduler.mu.Lock()
 	if scheduler.running {
-		scheduler.pending = true
+		if scheduler.pendingTrigger == "" || triggerPriority(trigger) > triggerPriority(scheduler.pendingTrigger) {
+			scheduler.pendingTrigger = trigger
+		}
 		scheduler.mu.Unlock()
 		return
 	}
@@ -406,15 +477,28 @@ func (scheduler *InsightsScheduler) recomputeLoop(trigger string) {
 		scheduler.recompute(nextTrigger)
 
 		scheduler.mu.Lock()
-		if scheduler.pending {
-			scheduler.pending = false
+		if scheduler.pendingTrigger != "" {
+			nextTrigger = scheduler.pendingTrigger
+			scheduler.pendingTrigger = ""
 			scheduler.mu.Unlock()
-			nextTrigger = "pending"
 			continue
 		}
 		scheduler.running = false
 		scheduler.mu.Unlock()
 		return
+	}
+}
+
+func triggerPriority(trigger string) int {
+	switch trigger {
+	case "event":
+		return 3
+	case "warmup":
+		return 2
+	case "startup":
+		return 1
+	default:
+		return 0
 	}
 }
 
@@ -428,6 +512,17 @@ func (scheduler *InsightsScheduler) recompute(trigger string) {
 			return
 		}
 		log.Printf("insights recompute failed to load readings: %v", err)
+		return
+	}
+	if len(readings) == 0 {
+		return
+	}
+
+	latestSampleAt := latestTimestamp(readings)
+	scheduler.mu.RLock()
+	alreadyAnalyzed := scheduler.lastAnalyzedSampleAt > 0 && latestSampleAt <= scheduler.lastAnalyzedSampleAt
+	scheduler.mu.RUnlock()
+	if trigger == "interval" && alreadyAnalyzed {
 		return
 	}
 
@@ -455,7 +550,11 @@ func (scheduler *InsightsScheduler) recompute(trigger string) {
 	scheduler.snapshot = snapshot
 	scheduler.hasSnapshot = true
 	if latestAnalyzed != nil {
-		scheduler.lastReading = latestAnalyzed
+		scheduler.lastAnalyzedSampleAt = latestAnalyzed.Timestamp
+		if scheduler.lastReading == nil || latestAnalyzed.Timestamp >= scheduler.lastReading.Timestamp {
+			scheduler.lastReading = latestAnalyzed
+			scheduler.recentReadings = []SensorReading{*latestAnalyzed}
+		}
 	}
 	scheduler.mu.Unlock()
 
@@ -493,7 +592,7 @@ func (scheduler *InsightsScheduler) analysisReadings(
 		}
 		return nil, insightsAnalysisSourceDurable, ErrStoreUnavailable
 	}
-	if trigger == "event" && len(liveReadings) > 0 {
+	if (trigger == "event" || trigger == "warmup") && len(liveReadings) > 0 {
 		return liveReadings, insightsAnalysisSourceLive, nil
 	}
 

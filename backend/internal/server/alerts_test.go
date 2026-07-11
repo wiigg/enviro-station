@@ -1,10 +1,54 @@
 package server
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"unicode/utf8"
 )
+
+func TestOpenAIAlertAnalyzerUsesTerraWithLowReasoningByDefault(t *testing.T) {
+	var requestPayload struct {
+		Model     string `json:"model"`
+		Reasoning struct {
+			Effort string `json:"effort"`
+		} `json:"reasoning"`
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&requestPayload); err != nil {
+			t.Errorf("decode request: %v", err)
+			response.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{"output_text":"{\"alerts\":[{\"topic\":\"air_quality\",\"kind\":\"insight\",\"severity\":\"info\",\"title\":\"Air quality stable\",\"message\":\"No material changes detected.\"}]}"}`))
+	}))
+	defer server.Close()
+
+	analyzer := NewOpenAIAlertAnalyzer(
+		"test-key",
+		"",
+		"",
+		server.URL,
+		1,
+		defaultAlertThresholds(),
+	)
+	if _, err := analyzer.Analyze(context.Background(), []SensorReading{{Timestamp: 1738886400}}); err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+
+	if requestPayload.Model != "gpt-5.6-terra" {
+		t.Fatalf("expected gpt-5.6-terra, got %q", requestPayload.Model)
+	}
+	if requestPayload.Reasoning.Effort != "low" {
+		t.Fatalf("expected low reasoning effort, got %q", requestPayload.Reasoning.Effort)
+	}
+}
 
 func TestAlertSchemaRequiresAtLeastOneInsight(t *testing.T) {
 	schema := alertSchema(4)

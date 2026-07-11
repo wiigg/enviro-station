@@ -77,11 +77,12 @@ func main() {
 
 	openAIAPIKey := strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
 	if openAIAPIKey != "" {
-		insightsModel := envOrDefault("OPENAI_INSIGHTS_MODEL", "gpt-5-mini")
+		insightsModel := envOrDefault("OPENAI_INSIGHTS_MODEL", "gpt-5.6-terra")
+		insightsReasoningEffort := envOrDefault("OPENAI_INSIGHTS_REASONING_EFFORT", "low")
 		insightsBaseURL := envOrDefault("OPENAI_BASE_URL", "https://api.openai.com/v1")
 		insightsMax := intOrDefault("OPENAI_INSIGHTS_MAX", 3)
 		insightsAnalysisLimit := intOrDefault("OPENAI_INSIGHTS_ANALYSIS_LIMIT", 900)
-		insightsRefreshInterval := durationOrDefault("OPENAI_INSIGHTS_REFRESH_INTERVAL", time.Hour)
+		insightsRefreshInterval := durationOrDefault("OPENAI_INSIGHTS_REFRESH_INTERVAL", 6*time.Hour)
 		insightsEventMinInterval := durationOrDefault(
 			"OPENAI_INSIGHTS_EVENT_MIN_INTERVAL",
 			10*time.Minute,
@@ -101,6 +102,7 @@ func main() {
 		alertAnalyzer := server.NewOpenAIAlertAnalyzer(
 			openAIAPIKey,
 			insightsModel,
+			insightsReasoningEffort,
 			insightsBaseURL,
 			insightsMax,
 			server.AlertThresholds{
@@ -137,8 +139,9 @@ func main() {
 			}),
 		)
 		log.Printf(
-			"ai insights enabled model=%s analysis_limit=%d refresh_interval=%s",
+			"ai insights enabled model=%s reasoning_effort=%s analysis_limit=%d refresh_interval=%s",
 			insightsModel,
+			insightsReasoningEffort,
 			insightsAnalysisLimit,
 			insightsRefreshInterval,
 		)

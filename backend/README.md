@@ -56,11 +56,12 @@ Range mode notes:
 - `TRUST_PROXY_HEADERS` (default: `false`)
 - `LIVE_BUFFER_LIMIT` (default: `3600`)
 - `OPENAI_API_KEY` (optional; enables `/api/insights`)
-- `OPENAI_INSIGHTS_MODEL` (default: `gpt-5-mini`)
+- `OPENAI_INSIGHTS_MODEL` (default: `gpt-5.6-terra`)
+- `OPENAI_INSIGHTS_REASONING_EFFORT` (default: `low`)
 - `OPENAI_BASE_URL` (default: `https://api.openai.com/v1`)
 - `OPENAI_INSIGHTS_MAX` (default: `3`; hard-capped at `3`)
 - `OPENAI_INSIGHTS_ANALYSIS_LIMIT` (default: `900`)
-- `OPENAI_INSIGHTS_REFRESH_INTERVAL` (default: `1h`)
+- `OPENAI_INSIGHTS_REFRESH_INTERVAL` (default: `6h`; maximum age before a scheduled refresh)
 - `OPENAI_INSIGHTS_EVENT_MIN_INTERVAL` (default: `10m`)
 - `OPENAI_INSIGHTS_PM2_TRIGGER` (default: `8`)
 - `OPENAI_INSIGHTS_PM10_TRIGGER` (default: `30`)
@@ -125,9 +126,12 @@ following a durable database access.
 ## Insights generation model
 
 Insights are precomputed in the backend, not generated per request.
-- Scheduled recompute at `OPENAI_INSIGHTS_REFRESH_INTERVAL`
-- Event-triggered recompute on significant threshold crossings or material changes
+- Immediate warm-up from the first live reading when no snapshot is available
+- Event-triggered recompute on threshold/severity crossings or material changes over a rolling 10-minute window
+- Scheduled refresh after `OPENAI_INSIGHTS_REFRESH_INTERVAL` only when no newer event refresh has reset the age
+- Scheduled refreshes skip analysis when no new telemetry has arrived
 - Live readings trigger recompute checks and are used for analysis when newer than durable history
+- Delayed or duplicate batch readings do not rewind the event baseline
 - Live-triggered recomputes avoid durable reads so realtime dashboards do not wake Neon for AI copy alone
 - `/api/insights` returns the latest stored snapshot
 - Durable-analysis snapshots are persisted in Postgres and restored on backend restart
