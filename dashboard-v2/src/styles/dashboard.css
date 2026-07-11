@@ -396,8 +396,104 @@
   font-weight: 800;
 }
 
+.diagnosticsSummaryState {
+  white-space: nowrap;
+}
+
+.diagnosticState-ok {
+  color: var(--ok);
+}
+
+.diagnosticState-warn {
+  color: var(--warn);
+}
+
+.diagnosticState-error {
+  color: var(--alert);
+}
+
+.diagnosticState-pending {
+  color: var(--accent-blue);
+}
+
 .diagnosticsContent {
   margin-top: 4px;
   border-top: 1px solid var(--border);
   padding: 14px 0 10px;
+}
+
+.diagnosticChecks {
+  gap: 0;
+}
+
+.diagnosticChecks .diagnosticCheck {
+  display: grid;
+  grid-template-columns: 9px minmax(0, 1fr);
+  gap: 11px;
+  border-top: 1px solid var(--border);
+  padding: 12px 0;
+}
+
+.diagnosticChecks .diagnosticCheck:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.diagnosticSignal {
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.diagnosticCopy {
+  min-width: 0;
+}
+
+.diagnosticLabelRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.diagnosticStateLabel {
+  flex: 0 0 auto;
+  font-size: 0.65rem;
+  font-weight: 850;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.diagnosticAction {
+  margin: 7px 0 0;
+  color: var(--text);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.diagnosticAction strong {
+  color: var(--muted-strong);
+  font-weight: 850;
+}
+
+.diagnosticEventsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 6px 0 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 15px;
+}
+
+.diagnosticEventsHeader p,
+.diagnosticEventsHeader span {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }

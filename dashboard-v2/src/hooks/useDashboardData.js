@@ -2,6 +2,7 @@ import { useCallback, useMemo } from "react";
 import { buildKpis } from "../lib/readings";
 import { resolveBackendBaseUrl } from "../lib/dashboardApi";
 import { DASHBOARD_DEVICE_LABEL, WINDOW_OPTIONS } from "../lib/dashboardConfig";
+import { buildDashboardDiagnostics } from "../lib/dashboardDiagnostics";
 import {
   buildTrendChartData,
   computeTemperatureDomain,
@@ -73,8 +74,10 @@ export function useDashboardData() {
   const {
     insights,
     insightsError,
+    insightGeneratedAt,
     isLoadingInsights,
-    insightSource
+    insightSource,
+    insightTrigger
   } = useInsightsData(backendBaseUrl);
   const { feedItems, feedError, isLoadingFeed } = useOpsFeedData(backendBaseUrl);
 
@@ -94,6 +97,38 @@ export function useDashboardData() {
   const alignedInsights = useMemo(
     () => insights.map((insight) => alignInsightSeverity(insight, kpis)),
     [insights, kpis]
+  );
+
+  const diagnostics = useMemo(
+    () =>
+      buildDashboardDiagnostics({
+        connectionStatus,
+        feedError,
+        feedItems,
+        insightGeneratedAt,
+        insightSource,
+        insightTrigger,
+        insights: alignedInsights,
+        insightsError,
+        isLoadingFeed,
+        isLoadingInsights,
+        lastError,
+        lastReadingAt
+      }),
+    [
+      alignedInsights,
+      connectionStatus,
+      feedError,
+      feedItems,
+      insightGeneratedAt,
+      insightSource,
+      insightTrigger,
+      insightsError,
+      isLoadingFeed,
+      isLoadingInsights,
+      lastError,
+      lastReadingAt
+    ]
   );
 
   const chartData = useMemo(
@@ -131,6 +166,9 @@ export function useDashboardData() {
     axisTickFormatter,
     chartData,
     connectionStatus,
+    diagnosticChecks: diagnostics.checks,
+    diagnosticsSummary: diagnostics.summary,
+    diagnosticsTone: diagnostics.tone,
     deviceLabel: DASHBOARD_DEVICE_LABEL,
     feedError,
     feedItems,

@@ -28,6 +28,17 @@ function renderDashboard(onSelectWindow = vi.fn(), chartData = [], insights = []
       chartData={chartData}
       connectionStatus="live"
       deviceLabel="Office"
+      diagnosticChecks={[
+        {
+          action: "",
+          id: "telemetry",
+          label: "Live telemetry",
+          state: "ok",
+          summary: "Latest reading just now."
+        }
+      ]}
+      diagnosticsSummary="All checks passing"
+      diagnosticsTone="ok"
       feedError=""
       feedItems={[]}
       insightSource="openai"
@@ -93,6 +104,17 @@ describe("DashboardView", () => {
       screen.getByRole("img", { name: "Particulate trend chart" })
     ).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "Temperature trend chart" })).toBeInTheDocument();
+  });
+
+  it("shows current checks before the operations timeline", () => {
+    renderDashboard();
+
+    fireEvent.click(screen.getByText("Diagnostics"));
+
+    expect(screen.getByText("All checks passing")).toBeVisible();
+    expect(screen.getByText("Live telemetry")).toBeVisible();
+    expect(screen.getByText("Latest reading just now.")).toBeVisible();
+    expect(screen.getByText("Recent operations")).toBeVisible();
   });
 
   it("renders complete long insight messages", () => {

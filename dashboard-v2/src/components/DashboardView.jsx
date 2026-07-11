@@ -10,6 +10,9 @@ export default function DashboardView({
   chartData,
   connectionStatus,
   deviceLabel,
+  diagnosticChecks,
+  diagnosticsSummary,
+  diagnosticsTone,
   feedError,
   feedItems,
   insightSource,
@@ -59,6 +62,9 @@ export default function DashboardView({
             lastError={lastError}
           />
           <OpsFeedCard
+            diagnosticChecks={diagnosticChecks}
+            diagnosticsSummary={diagnosticsSummary}
+            diagnosticsTone={diagnosticsTone}
             feedError={feedError}
             feedItems={feedItems}
             isLoadingFeed={isLoadingFeed}

@@ -14,6 +14,8 @@ export function useInsightsData(backendBaseUrl) {
   const [insightsError, setInsightsError] = useState("");
   const [isLoadingInsights, setIsLoadingInsights] = useState(true);
   const [insightSource, setInsightSource] = useState("openai");
+  const [insightGeneratedAt, setInsightGeneratedAt] = useState(null);
+  const [insightTrigger, setInsightTrigger] = useState("");
 
   const pollInsights = useCallback(
     async ({ signal, isClosed }) => {
@@ -38,9 +40,13 @@ export function useInsightsData(backendBaseUrl) {
           .filter(Boolean)
           .slice(0, INSIGHT_MAX_ITEMS);
         const nextSource = typeof payload.source === "string" ? payload.source : "openai";
+        const generatedAt = Number(payload.generated_at);
+        const trigger = typeof payload.trigger === "string" ? payload.trigger : "";
 
         setInsights(nextInsights);
         setInsightSource(nextSource);
+        setInsightGeneratedAt(Number.isFinite(generatedAt) ? generatedAt : null);
+        setInsightTrigger(trigger);
         setInsightsError("");
       } catch (error) {
         if (isClosed() || signal.aborted) {
@@ -63,7 +69,9 @@ export function useInsightsData(backendBaseUrl) {
   return {
     insights,
     insightsError,
+    insightGeneratedAt,
     isLoadingInsights,
-    insightSource
+    insightSource,
+    insightTrigger
   };
 }
