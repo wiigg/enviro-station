@@ -31,4 +31,17 @@ describe("reading normalization and KPIs", () => {
 
     expect(pm25).toMatchObject({ value: "16.0", state: "alert" });
   });
+
+  it("marks cached particulate values unavailable", () => {
+    const normalized = normalizeReading(reading({ pm2: 12, pm10: 12, pm_available: false }));
+    const particulateKpis = buildKpis([normalized]).filter(
+      (item) => item.label === "PM2.5" || item.label === "PM10"
+    );
+
+    expect(normalized).toMatchObject({ pmAvailable: false, pm2: null, pm10: null });
+    expect(particulateKpis).toEqual([
+      expect.objectContaining({ label: "PM2.5", value: "--", state: "muted" }),
+      expect.objectContaining({ label: "PM10", value: "--", state: "muted" })
+    ]);
+  });
 });

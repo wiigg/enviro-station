@@ -22,23 +22,25 @@ type SensorReading struct {
 	PM1         float64  `json:"pm1"`
 	PM2         float64  `json:"pm2"`
 	PM10        float64  `json:"pm10"`
+	PMAvailable *bool    `json:"pm_available,omitempty"`
 	PM1Max      *float64 `json:"pm1_max,omitempty"`
 	PM2Max      *float64 `json:"pm2_max,omitempty"`
 	PM10Max     *float64 `json:"pm10_max,omitempty"`
 }
 
 var allowedReadingKeys = map[string]struct{}{
-	"device_id":   {},
-	"timestamp":   {},
-	"temperature": {},
-	"pressure":    {},
-	"humidity":    {},
-	"oxidised":    {},
-	"reduced":     {},
-	"nh3":         {},
-	"pm1":         {},
-	"pm2":         {},
-	"pm10":        {},
+	"device_id":    {},
+	"timestamp":    {},
+	"temperature":  {},
+	"pressure":     {},
+	"humidity":     {},
+	"oxidised":     {},
+	"reduced":      {},
+	"nh3":          {},
+	"pm1":          {},
+	"pm2":          {},
+	"pm10":         {},
+	"pm_available": {},
 }
 
 func DecodeReading(raw []byte) (SensorReading, error) {
@@ -145,6 +147,10 @@ func decodeReadingPayload(payload map[string]any) (SensorReading, error) {
 	if err != nil {
 		return SensorReading{}, err
 	}
+	pmAvailable, err := parseOptionalBoolField(payload, "pm_available")
+	if err != nil {
+		return SensorReading{}, err
+	}
 
 	return SensorReading{
 		DeviceID:    deviceID,
@@ -158,7 +164,16 @@ func decodeReadingPayload(payload map[string]any) (SensorReading, error) {
 		PM1:         pm1,
 		PM2:         pm2,
 		PM10:        pm10,
+		PMAvailable: pmAvailable,
 	}, nil
+}
+
+func particulateAvailable(reading SensorReading) bool {
+	return reading.PMAvailable == nil || *reading.PMAvailable
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }
 
 func parseDeviceID(payload map[string]any) (string, error) {
@@ -210,6 +225,19 @@ func parseInt64Field(payload map[string]any, key string) (int64, error) {
 		return 0, fmt.Errorf("invalid field %s: %w", key, err)
 	}
 	return parsed, nil
+}
+
+func parseOptionalBoolField(payload map[string]any, key string) (*bool, error) {
+	value, ok := payload[key]
+	if !ok {
+		return nil, nil
+	}
+
+	parsed, ok := value.(bool)
+	if !ok {
+		return nil, fmt.Errorf("invalid field %s: unsupported boolean type %T", key, value)
+	}
+	return boolPtr(parsed), nil
 }
 
 func parseFloat(value any) (float64, error) {

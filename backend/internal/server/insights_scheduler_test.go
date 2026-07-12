@@ -56,6 +56,49 @@ func TestShouldTriggerFromReadingUsesRollingTenMinuteChange(t *testing.T) {
 	}
 }
 
+func TestUnavailableParticulateValuesDoNotTriggerInsights(t *testing.T) {
+	scheduler := NewInsightsScheduler(&fakeStore{}, &fakeAlertAnalyzer{}, testInsightsSchedulerConfig())
+	baseTimestamp := int64(1738886400)
+
+	scheduler.triggerFromReading(SensorReading{
+		Timestamp:   baseTimestamp,
+		Temperature: 22,
+		Humidity:    45,
+		PM2:         3,
+		PM10:        5,
+		PMAvailable: boolPtr(false),
+	})
+	trigger := scheduler.triggerFromReading(SensorReading{
+		Timestamp:   baseTimestamp + 60,
+		Temperature: 22,
+		Humidity:    45,
+		PM2:         100,
+		PM10:        150,
+		PMAvailable: boolPtr(false),
+	})
+
+	if trigger != "" {
+		t.Fatalf("expected cached PM changes to be ignored, got trigger %q", trigger)
+	}
+}
+
+func TestParticulateAvailabilityChangeRefreshesInsights(t *testing.T) {
+	scheduler := NewInsightsScheduler(&fakeStore{}, &fakeAlertAnalyzer{}, testInsightsSchedulerConfig())
+	baseTimestamp := int64(1738886400)
+
+	scheduler.triggerFromReading(SensorReading{Timestamp: baseTimestamp, PM2: 3, PM10: 5})
+	trigger := scheduler.triggerFromReading(SensorReading{
+		Timestamp:   baseTimestamp + 60,
+		PM2:         3,
+		PM10:        5,
+		PMAvailable: boolPtr(false),
+	})
+
+	if trigger != "event" {
+		t.Fatalf("expected sensor availability change to refresh insights, got %q", trigger)
+	}
+}
+
 func TestShouldTriggerFromReadingIgnoresDelayedReadings(t *testing.T) {
 	scheduler := NewInsightsScheduler(&fakeStore{}, &fakeAlertAnalyzer{}, testInsightsSchedulerConfig())
 	baseTimestamp := int64(1738886400)

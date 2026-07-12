@@ -12,6 +12,7 @@ Enviro Station is an air quality monitoring platform with three services:
 2. Device retains one durable sample per minute and flushes those samples to Postgres every 30 minutes.
 3. Dashboard uses the live stream for realtime updates and device-scoped Postgres buckets for longer-range history.
 4. If Postgres is down, the backend can still boot in live-only mode and retry durable storage later.
+5. Particle readings carry `pm_available`; failed PMS5003 reads are stored as unavailable and excluded from charts and insights.
 
 ## Repository Layout
 

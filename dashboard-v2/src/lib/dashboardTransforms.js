@@ -145,6 +145,7 @@ function rollingAveragesForPoints(readings, points, windowMs, fields) {
 
   const averages = [];
   const totals = Object.fromEntries(fields.map(({ field }) => [field, 0]));
+  const counts = Object.fromEntries(fields.map(({ field }) => [field, 0]));
   let startIndex = 0;
   let endIndex = 0;
 
@@ -156,35 +157,37 @@ function rollingAveragesForPoints(readings, points, windowMs, fields) {
       readings[endIndex].timestamp <= point.timestamp
     ) {
       for (const { field } of fields) {
-        totals[field] += averageLineValue(readings[endIndex], field);
+        const value = readings[endIndex][field];
+        if (Number.isFinite(value)) {
+          totals[field] += value;
+          counts[field] += 1;
+        }
       }
       endIndex += 1;
     }
 
     while (startIndex < endIndex && readings[startIndex].timestamp < windowStart) {
       for (const { field } of fields) {
-        totals[field] -= averageLineValue(readings[startIndex], field);
+        const value = readings[startIndex][field];
+        if (Number.isFinite(value)) {
+          totals[field] -= value;
+          counts[field] -= 1;
+        }
       }
       startIndex += 1;
     }
 
-    const count = endIndex - startIndex;
     averages.push(
       Object.fromEntries(
         fields.map(({ field, outputKey }) => [
           outputKey,
-          count > 0 ? totals[field] / count : null
+          counts[field] > 0 ? totals[field] / counts[field] : null
         ])
       )
     );
   }
 
   return averages;
-}
-
-function averageLineValue(reading, field) {
-  const value = reading[field];
-  return Number.isFinite(value) ? value : 0;
 }
 
 function largestTriangleThreeBuckets(readings, maxPoints, fields) {
@@ -319,12 +322,17 @@ function bucketReadingsByTime(readings, bucketMs) {
     const bucketId = Math.floor(reading.timestamp / bucketMs);
     const previous = buckets.get(bucketId);
     const next = { ...reading };
+    const bucketHasParticulate = previous?.pmAvailable === true || reading.pmAvailable === true;
+    next.pmAvailable = bucketHasParticulate;
 
     for (const [valueField, maxField] of PARTICULATE_MAX_FIELDS) {
-      next[maxField] = Math.max(
-        previous?.[maxField] ?? previous?.[valueField] ?? Number.NEGATIVE_INFINITY,
-        reading[maxField] ?? reading[valueField]
-      );
+      const values = [
+        previous?.[maxField],
+        previous?.[valueField],
+        reading[maxField],
+        reading[valueField]
+      ].filter(Number.isFinite);
+      next[maxField] = values.length ? Math.max(...values) : null;
     }
 
     buckets.set(bucketId, next);

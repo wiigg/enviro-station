@@ -91,11 +91,20 @@ export function useDashboardData() {
   );
 
   const kpis = useMemo(() => buildKpis(readings, windowId), [readings, windowId]);
-  const lastReadingAt = readings[readings.length - 1]?.timestamp ?? null;
+  const latestReading = readings[readings.length - 1] ?? null;
+  const lastReadingAt = latestReading?.timestamp ?? null;
+  const particulateAvailable = latestReading?.pmAvailable ?? null;
+  const visibleInsights = useMemo(
+    () =>
+      particulateAvailable === false
+        ? insights.filter((insight) => insight.topic !== "air_quality")
+        : insights,
+    [insights, particulateAvailable]
+  );
 
   const alignedInsights = useMemo(
-    () => insights.map((insight) => alignInsightSeverity(insight, kpis)),
-    [insights, kpis]
+    () => visibleInsights.map((insight) => alignInsightSeverity(insight, kpis)),
+    [kpis, visibleInsights]
   );
 
   const diagnostics = useMemo(
@@ -111,7 +120,8 @@ export function useDashboardData() {
         isLoadingFeed,
         isLoadingInsights,
         lastError,
-        lastReadingAt
+        lastReadingAt,
+        particulateAvailable
       }),
     [
       alignedInsights,
@@ -124,7 +134,8 @@ export function useDashboardData() {
       isLoadingFeed,
       isLoadingInsights,
       lastError,
-      lastReadingAt
+      lastReadingAt,
+      particulateAvailable
     ]
   );
 

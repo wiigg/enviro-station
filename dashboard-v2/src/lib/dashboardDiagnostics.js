@@ -72,6 +72,34 @@ function buildTelemetryCheck({ connectionStatus, lastError, lastReadingAt, now }
   };
 }
 
+function buildParticulateCheck(particulateAvailable) {
+  if (particulateAvailable === false) {
+    return {
+      id: "particulate",
+      label: "Particle sensor",
+      state: "error",
+      summary: "No fresh PM readings; cached values are excluded.",
+      action: "Power down the Pi, reseat the PMS5003 cable, then verify its fan is running."
+    };
+  }
+  if (particulateAvailable === true) {
+    return {
+      id: "particulate",
+      label: "Particle sensor",
+      state: "ok",
+      summary: "Fresh PM readings received.",
+      action: ""
+    };
+  }
+  return {
+    id: "particulate",
+    label: "Particle sensor",
+    state: "pending",
+    summary: "Waiting for particle sensor status.",
+    action: ""
+  };
+}
+
 function insightTriggerLabel(trigger) {
   if (trigger === "event") {
     return "sensor change";
@@ -195,10 +223,12 @@ export function buildDashboardDiagnostics({
   isLoadingInsights,
   lastError,
   lastReadingAt,
+  particulateAvailable,
   now = Date.now()
 }) {
   const checks = [
     buildTelemetryCheck({ connectionStatus, lastError, lastReadingAt, now }),
+    buildParticulateCheck(particulateAvailable),
     buildInsightsCheck({
       insightGeneratedAt,
       insightTrigger,

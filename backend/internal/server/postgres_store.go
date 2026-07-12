@@ -160,8 +160,8 @@ func (store *PostgresStore) isMigrationApplied(ctx context.Context, version stri
 func (store *PostgresStore) Add(ctx context.Context, reading SensorReading) error {
 	const insertReadingQuery = `
 	INSERT INTO sensor_readings (
-	  device_id, timestamp, temperature, pressure, humidity, oxidised, reduced, nh3, pm1, pm2, pm10
-	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+	  device_id, timestamp, temperature, pressure, humidity, oxidised, reduced, nh3, pm1, pm2, pm10, pm_available
+	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 	ON CONFLICT (device_id, timestamp) DO UPDATE SET
 	  temperature = EXCLUDED.temperature,
 	  pressure = EXCLUDED.pressure,
@@ -171,7 +171,8 @@ func (store *PostgresStore) Add(ctx context.Context, reading SensorReading) erro
 	  nh3 = EXCLUDED.nh3,
 	  pm1 = EXCLUDED.pm1,
 	  pm2 = EXCLUDED.pm2,
-	  pm10 = EXCLUDED.pm10
+	  pm10 = EXCLUDED.pm10,
+	  pm_available = EXCLUDED.pm_available
 	`
 
 	_, err := store.pool.Exec(
@@ -188,6 +189,7 @@ func (store *PostgresStore) Add(ctx context.Context, reading SensorReading) erro
 		reading.PM1,
 		reading.PM2,
 		reading.PM10,
+		particulateAvailable(reading),
 	)
 	return err
 }
@@ -200,8 +202,8 @@ func (store *PostgresStore) AddBatch(ctx context.Context, readings []SensorReadi
 
 	const insertReadingQuery = `
 	INSERT INTO sensor_readings (
-	  device_id, timestamp, temperature, pressure, humidity, oxidised, reduced, nh3, pm1, pm2, pm10
-	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+	  device_id, timestamp, temperature, pressure, humidity, oxidised, reduced, nh3, pm1, pm2, pm10, pm_available
+	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 	ON CONFLICT (device_id, timestamp) DO UPDATE SET
 	  temperature = EXCLUDED.temperature,
 	  pressure = EXCLUDED.pressure,
@@ -211,7 +213,8 @@ func (store *PostgresStore) AddBatch(ctx context.Context, readings []SensorReadi
 	  nh3 = EXCLUDED.nh3,
 	  pm1 = EXCLUDED.pm1,
 	  pm2 = EXCLUDED.pm2,
-	  pm10 = EXCLUDED.pm10
+	  pm10 = EXCLUDED.pm10,
+	  pm_available = EXCLUDED.pm_available
 	`
 
 	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{})
@@ -234,6 +237,7 @@ func (store *PostgresStore) AddBatch(ctx context.Context, readings []SensorReadi
 			reading.PM1,
 			reading.PM2,
 			reading.PM10,
+			particulateAvailable(reading),
 		)
 	}
 
@@ -256,7 +260,7 @@ func (store *PostgresStore) Latest(ctx context.Context, limit int) ([]SensorRead
 	}
 
 	const query = `
-	SELECT device_id, timestamp, temperature, pressure, humidity, oxidised, reduced, nh3, pm1, pm2, pm10
+	SELECT device_id, timestamp, temperature, pressure, humidity, oxidised, reduced, nh3, pm1, pm2, pm10, pm_available
 	FROM sensor_readings
 	ORDER BY id DESC
 LIMIT $1
@@ -271,6 +275,7 @@ LIMIT $1
 	readings := make([]SensorReading, 0, limit)
 	for rows.Next() {
 		var reading SensorReading
+		var pmAvailable bool
 		if err := rows.Scan(
 			&reading.DeviceID,
 			&reading.Timestamp,
@@ -283,9 +288,11 @@ LIMIT $1
 			&reading.PM1,
 			&reading.PM2,
 			&reading.PM10,
+			&pmAvailable,
 		); err != nil {
 			return nil, err
 		}
+		reading.PMAvailable = boolPtr(pmAvailable)
 		readings = append(readings, reading)
 	}
 
@@ -353,16 +360,17 @@ func (store *PostgresStore) Range(
 	    AVG(oxidised) AS oxidised,
 	    AVG(reduced) AS reduced,
 	    AVG(nh3) AS nh3,
-	    AVG(pm1) AS pm1,
-	    AVG(pm2) AS pm2,
-	    AVG(pm10) AS pm10,
-	    MAX(pm1) AS pm1_max,
-	    MAX(pm2) AS pm2_max,
-	    MAX(pm10) AS pm10_max
+	    COALESCE(AVG(pm1) FILTER (WHERE pm_available), 0) AS pm1,
+	    COALESCE(AVG(pm2) FILTER (WHERE pm_available), 0) AS pm2,
+	    COALESCE(AVG(pm10) FILTER (WHERE pm_available), 0) AS pm10,
+	    COALESCE(MAX(pm1) FILTER (WHERE pm_available), 0) AS pm1_max,
+	    COALESCE(MAX(pm2) FILTER (WHERE pm_available), 0) AS pm2_max,
+	    COALESCE(MAX(pm10) FILTER (WHERE pm_available), 0) AS pm10_max,
+	    BOOL_OR(pm_available) AS pm_available
 	  FROM eligible_readings
 	  GROUP BY output_device_id, ((timestamp - $1) / $3)
 	)
-	SELECT device_id, timestamp, temperature, pressure, humidity, oxidised, reduced, nh3, pm1, pm2, pm10, pm1_max, pm2_max, pm10_max
+	SELECT device_id, timestamp, temperature, pressure, humidity, oxidised, reduced, nh3, pm1, pm2, pm10, pm1_max, pm2_max, pm10_max, pm_available
 	FROM bucketed
 	ORDER BY timestamp ASC
 	LIMIT $5
@@ -388,6 +396,7 @@ func (store *PostgresStore) Range(
 		var pm1Max float64
 		var pm2Max float64
 		var pm10Max float64
+		var pmAvailable bool
 		if err = rows.Scan(
 			&reading.DeviceID,
 			&reading.Timestamp,
@@ -403,12 +412,14 @@ func (store *PostgresStore) Range(
 			&pm1Max,
 			&pm2Max,
 			&pm10Max,
+			&pmAvailable,
 		); err != nil {
 			return nil, err
 		}
 		reading.PM1Max = float64Ptr(pm1Max)
 		reading.PM2Max = float64Ptr(pm2Max)
 		reading.PM10Max = float64Ptr(pm10Max)
+		reading.PMAvailable = boolPtr(pmAvailable)
 		readings = append(readings, reading)
 	}
 

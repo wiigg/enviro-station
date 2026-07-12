@@ -310,6 +310,7 @@ func systemPrompt(maxAlerts int, thresholds AlertThresholds) string {
 			"If all monitored conditions are stable, return exactly one info insight with topic general. "+
 			"Otherwise return only the noteworthy topics and omit stable ones. "+
 			"Each non-general alert must focus on one topic only and must not bundle unrelated metrics. "+
+			"When particulate_available is false, do not discuss, infer, or generate alerts from PM values because they are unavailable. "+
 			"For air_quality discuss PM2.5 and PM10 only, treating PM2.5 at or above %.1f ug/m3, PM10 at or above %.1f ug/m3, or 10 minute moves of %.1f/%.1f ug/m3 as noteworthy. "+
 			"For humidity discuss humidity only, treating values below %.0f%% or above %.0f%% and 10 minute moves of %.1f points as noteworthy. "+
 			"For temperature discuss temperature only, treating values below %.1fC or above %.1fC and 10 minute moves of %.1fC as noteworthy. "+
@@ -453,6 +454,9 @@ func normalizeAlerts(
 		if topic == "" {
 			continue
 		}
+		if !summary.ParticulateAvailable && (topic == "air_quality" || topic == "general") {
+			continue
+		}
 		severity = normalizeAlertSeverity(topic, severity, summary, thresholds)
 		if severity == "critical" || severity == "warn" {
 			kind = "alert"
@@ -573,6 +577,9 @@ func normalizeAlertSeverity(
 
 	switch topic {
 	case "air_quality":
+		if !summary.ParticulateAvailable {
+			return severity
+		}
 		if summary.Latest.PM2 >= thresholds.PM2Threshold ||
 			summary.Latest.PM10 >= thresholds.PM10Threshold {
 			return "warn"
@@ -598,6 +605,9 @@ func normalizeAlertSeverity(
 func topicHasCriticalValue(topic string, summary alertSummary) bool {
 	switch topic {
 	case "air_quality":
+		if !summary.ParticulateAvailable {
+			return false
+		}
 		return summary.Latest.PM2 > criticalPM2Threshold ||
 			summary.Latest.PM10 > criticalPM10Threshold
 	case "humidity":
@@ -676,6 +686,9 @@ func isStableSummary(summary alertSummary, thresholds AlertThresholds) bool {
 func topicNeedsFallbackAlert(summary alertSummary, topic string, thresholds AlertThresholds) bool {
 	switch topic {
 	case "air_quality":
+		if !summary.ParticulateAvailable {
+			return false
+		}
 		return summary.Latest.PM2 >= thresholds.PM2Threshold ||
 			summary.Latest.PM10 >= thresholds.PM10Threshold ||
 			math.Abs(summary.Delta10m.PM2) >= thresholds.PM2DeltaTrigger ||
@@ -947,13 +960,22 @@ func fallbackStableAlert(readings []SensorReading) Alert {
 }
 
 func fallbackStableAlertFromSummary(summary alertSummary) Alert {
-	message := fmt.Sprintf(
-		"Conditions are stable. PM2.5 %.1f ug/m3, PM10 %.1f ug/m3, humidity %.0f%%, temperature %.1fC.",
-		summary.Latest.PM2,
-		summary.Latest.PM10,
-		summary.Latest.Humidity,
-		summary.Latest.Temperature,
-	)
+	message := ""
+	if summary.ParticulateAvailable {
+		message = fmt.Sprintf(
+			"Conditions are stable. PM2.5 %.1f ug/m3, PM10 %.1f ug/m3, humidity %.0f%%, temperature %.1fC.",
+			summary.Latest.PM2,
+			summary.Latest.PM10,
+			summary.Latest.Humidity,
+			summary.Latest.Temperature,
+		)
+	} else {
+		message = fmt.Sprintf(
+			"Temperature %.1fC and humidity %.0f%% are stable. Particle data is unavailable and was excluded.",
+			summary.Latest.Temperature,
+			summary.Latest.Humidity,
+		)
+	}
 
 	return Alert{
 		Topic:    "general",
@@ -965,15 +987,17 @@ func fallbackStableAlertFromSummary(summary alertSummary) Alert {
 }
 
 type alertSummary struct {
-	SampleCount int            `json:"sample_count"`
-	WindowMin   int64          `json:"window_minutes"`
-	LatestTS    int64          `json:"latest_timestamp"`
-	Latest      metricSnapshot `json:"latest"`
-	Averages    metricSnapshot `json:"averages"`
-	Minimums    metricSnapshot `json:"minimums"`
-	Maximums    metricSnapshot `json:"maximums"`
-	Delta10m    metricSnapshot `json:"delta_10m"`
-	Delta60m    metricSnapshot `json:"delta_60m"`
+	SampleCount          int            `json:"sample_count"`
+	ParticulateSamples   int            `json:"particulate_samples"`
+	ParticulateAvailable bool           `json:"particulate_available"`
+	WindowMin            int64          `json:"window_minutes"`
+	LatestTS             int64          `json:"latest_timestamp"`
+	Latest               metricSnapshot `json:"latest"`
+	Averages             metricSnapshot `json:"averages"`
+	Minimums             metricSnapshot `json:"minimums"`
+	Maximums             metricSnapshot `json:"maximums"`
+	Delta10m             metricSnapshot `json:"delta_10m"`
+	Delta60m             metricSnapshot `json:"delta_60m"`
 }
 
 type metricSnapshot struct {
@@ -986,52 +1010,84 @@ type metricSnapshot struct {
 func buildAlertSummary(readings []SensorReading) alertSummary {
 	latest := readings[len(readings)-1]
 	oldest := readings[0]
+	pmReadings := availableParticulateReadings(readings)
+	pmAvailable := particulateAvailable(latest)
+	latestPM2 := 0.0
+	latestPM10 := 0.0
+	if pmAvailable {
+		latestPM2 = latest.PM2
+		latestPM10 = latest.PM10
+	}
 	windowMin := int64(0)
 	if latest.Timestamp > oldest.Timestamp {
 		windowMin = (latest.Timestamp - oldest.Timestamp) / secondsPerMinute
 	}
 
 	return alertSummary{
-		SampleCount: len(readings),
-		WindowMin:   windowMin,
-		LatestTS:    latest.Timestamp,
+		SampleCount:          len(readings),
+		ParticulateSamples:   len(pmReadings),
+		ParticulateAvailable: pmAvailable,
+		WindowMin:            windowMin,
+		LatestTS:             latest.Timestamp,
 		Latest: metricSnapshot{
-			PM2:         round1(latest.PM2),
-			PM10:        round1(latest.PM10),
+			PM2:         round1(latestPM2),
+			PM10:        round1(latestPM10),
 			Temperature: round1(latest.Temperature),
 			Humidity:    round1(latest.Humidity),
 		},
 		Averages: metricSnapshot{
-			PM2:         round1(avgMetric(readings, func(reading SensorReading) float64 { return reading.PM2 })),
-			PM10:        round1(avgMetric(readings, func(reading SensorReading) float64 { return reading.PM10 })),
+			PM2:         round1(avgMetric(pmReadings, func(reading SensorReading) float64 { return reading.PM2 })),
+			PM10:        round1(avgMetric(pmReadings, func(reading SensorReading) float64 { return reading.PM10 })),
 			Temperature: round1(avgMetric(readings, func(reading SensorReading) float64 { return reading.Temperature })),
 			Humidity:    round1(avgMetric(readings, func(reading SensorReading) float64 { return reading.Humidity })),
 		},
 		Minimums: metricSnapshot{
-			PM2:         round1(minMetric(readings, func(reading SensorReading) float64 { return reading.PM2 })),
-			PM10:        round1(minMetric(readings, func(reading SensorReading) float64 { return reading.PM10 })),
+			PM2:         round1(minMetric(pmReadings, func(reading SensorReading) float64 { return reading.PM2 })),
+			PM10:        round1(minMetric(pmReadings, func(reading SensorReading) float64 { return reading.PM10 })),
 			Temperature: round1(minMetric(readings, func(reading SensorReading) float64 { return reading.Temperature })),
 			Humidity:    round1(minMetric(readings, func(reading SensorReading) float64 { return reading.Humidity })),
 		},
 		Maximums: metricSnapshot{
-			PM2:         round1(maxMetric(readings, func(reading SensorReading) float64 { return reading.PM2 })),
-			PM10:        round1(maxMetric(readings, func(reading SensorReading) float64 { return reading.PM10 })),
+			PM2:         round1(maxMetric(pmReadings, func(reading SensorReading) float64 { return reading.PM2 })),
+			PM10:        round1(maxMetric(pmReadings, func(reading SensorReading) float64 { return reading.PM10 })),
 			Temperature: round1(maxMetric(readings, func(reading SensorReading) float64 { return reading.Temperature })),
 			Humidity:    round1(maxMetric(readings, func(reading SensorReading) float64 { return reading.Humidity })),
 		},
 		Delta10m: metricSnapshot{
-			PM2:         round1(deltaAtMinutes(readings, 10, func(reading SensorReading) float64 { return reading.PM2 })),
-			PM10:        round1(deltaAtMinutes(readings, 10, func(reading SensorReading) float64 { return reading.PM10 })),
+			PM2:         round1(pmDeltaAtMinutes(pmReadings, pmAvailable, 10, func(reading SensorReading) float64 { return reading.PM2 })),
+			PM10:        round1(pmDeltaAtMinutes(pmReadings, pmAvailable, 10, func(reading SensorReading) float64 { return reading.PM10 })),
 			Temperature: round1(deltaAtMinutes(readings, 10, func(reading SensorReading) float64 { return reading.Temperature })),
 			Humidity:    round1(deltaAtMinutes(readings, 10, func(reading SensorReading) float64 { return reading.Humidity })),
 		},
 		Delta60m: metricSnapshot{
-			PM2:         round1(deltaAtMinutes(readings, 60, func(reading SensorReading) float64 { return reading.PM2 })),
-			PM10:        round1(deltaAtMinutes(readings, 60, func(reading SensorReading) float64 { return reading.PM10 })),
+			PM2:         round1(pmDeltaAtMinutes(pmReadings, pmAvailable, 60, func(reading SensorReading) float64 { return reading.PM2 })),
+			PM10:        round1(pmDeltaAtMinutes(pmReadings, pmAvailable, 60, func(reading SensorReading) float64 { return reading.PM10 })),
 			Temperature: round1(deltaAtMinutes(readings, 60, func(reading SensorReading) float64 { return reading.Temperature })),
 			Humidity:    round1(deltaAtMinutes(readings, 60, func(reading SensorReading) float64 { return reading.Humidity })),
 		},
 	}
+}
+
+func availableParticulateReadings(readings []SensorReading) []SensorReading {
+	output := make([]SensorReading, 0, len(readings))
+	for _, reading := range readings {
+		if particulateAvailable(reading) {
+			output = append(output, reading)
+		}
+	}
+	return output
+}
+
+func pmDeltaAtMinutes(
+	readings []SensorReading,
+	latestAvailable bool,
+	minutes int64,
+	metric func(SensorReading) float64,
+) float64 {
+	if !latestAvailable {
+		return 0
+	}
+	return deltaAtMinutes(readings, minutes, metric)
 }
 
 func avgMetric(readings []SensorReading, metric func(SensorReading) float64) float64 {

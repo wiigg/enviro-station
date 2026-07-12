@@ -109,6 +109,9 @@ const TrendPanel = memo(function TrendPanel({
   tooltipName,
   tooltipUnit
 }) {
+  const hasMetricData = chartData.some(
+    (point) => Number.isFinite(point[lineDataKey]) || Number.isFinite(point[averageDataKey])
+  );
   const yAxisTicks = useParticulateYAxis
     ? particulateAxisTicks(chartData, [lineDataKey, averageDataKey])
     : undefined;
@@ -131,7 +134,7 @@ const TrendPanel = memo(function TrendPanel({
           </span>
         </div>
       </div>
-      {chartData.length ? (
+      {hasMetricData ? (
         <div className="chart" role="img" aria-label={ariaLabel}>
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={chartData} margin={{ top: 8, right: 10, left: 0, bottom: 0 }}>
@@ -172,7 +175,7 @@ const TrendPanel = memo(function TrendPanel({
                 strokeWidth={2}
                 strokeDasharray="5 5"
                 dot={false}
-                connectNulls
+                connectNulls={!useParticulateYAxis}
                 isAnimationActive={false}
               />
               <Line
@@ -188,7 +191,11 @@ const TrendPanel = memo(function TrendPanel({
           </ResponsiveContainer>
         </div>
       ) : (
-        <p className="emptyState">No data in selected window yet.</p>
+        <p className="emptyState">
+          {useParticulateYAxis
+            ? "Particle sensor unavailable."
+            : "No data in selected window yet."}
+        </p>
       )}
     </article>
   );

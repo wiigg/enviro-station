@@ -311,16 +311,29 @@ func (scheduler *InsightsScheduler) triggerFromReading(reading SensorReading) st
 	scheduler.lastReading = &latest
 	windowReference := scheduler.recordRecentReading(reading)
 
-	pm2Delta := reading.PM2 - windowReference.PM2
-	pm10Delta := reading.PM10 - windowReference.PM10
-	pm2SeverityChange := severityChange(
-		pmSeverity(previous.PM2, scheduler.config.PM2Threshold, criticalPM2Threshold),
-		pmSeverity(reading.PM2, scheduler.config.PM2Threshold, criticalPM2Threshold),
-	)
-	pm10SeverityChange := severityChange(
-		pmSeverity(previous.PM10, scheduler.config.PM10Threshold, criticalPM10Threshold),
-		pmSeverity(reading.PM10, scheduler.config.PM10Threshold, criticalPM10Threshold),
-	)
+	previousPMAvailable := particulateAvailable(previous)
+	currentPMAvailable := particulateAvailable(reading)
+	pmAvailabilityChanged := previousPMAvailable != currentPMAvailable
+	pm2Delta := 0.0
+	pm10Delta := 0.0
+	pm2SeverityChange := 0
+	pm10SeverityChange := 0
+	if previousPMAvailable && currentPMAvailable {
+		pm2SeverityChange = severityChange(
+			pmSeverity(previous.PM2, scheduler.config.PM2Threshold, criticalPM2Threshold),
+			pmSeverity(reading.PM2, scheduler.config.PM2Threshold, criticalPM2Threshold),
+		)
+		pm10SeverityChange = severityChange(
+			pmSeverity(previous.PM10, scheduler.config.PM10Threshold, criticalPM10Threshold),
+			pmSeverity(reading.PM10, scheduler.config.PM10Threshold, criticalPM10Threshold),
+		)
+	}
+	if currentPMAvailable {
+		if pmReference, ok := firstAvailableParticulateReading(scheduler.recentReadings); ok {
+			pm2Delta = reading.PM2 - pmReference.PM2
+			pm10Delta = reading.PM10 - pmReference.PM10
+		}
+	}
 	humiditySeverityChange := severityChange(
 		humiditySeverity(previous.Humidity, scheduler.config.HumidityLowThreshold, scheduler.config.HumidityHighThreshold),
 		humiditySeverity(reading.Humidity, scheduler.config.HumidityLowThreshold, scheduler.config.HumidityHighThreshold),
@@ -329,12 +342,14 @@ func (scheduler *InsightsScheduler) triggerFromReading(reading SensorReading) st
 		temperatureSeverity(previous.Temperature, scheduler.config.TemperatureLowThreshold, scheduler.config.TemperatureHighThreshold),
 		temperatureSeverity(reading.Temperature, scheduler.config.TemperatureLowThreshold, scheduler.config.TemperatureHighThreshold),
 	)
-	severityChanged := pm2SeverityChange != 0 ||
+	severityChanged := pmAvailabilityChanged ||
+		pm2SeverityChange != 0 ||
 		pm10SeverityChange != 0 ||
 		humiditySeverityChange != 0 ||
 		temperatureSeverityChange != 0
 
-	worsening := pm2SeverityChange > 0 ||
+	worsening := (previousPMAvailable && !currentPMAvailable) ||
+		pm2SeverityChange > 0 ||
 		pm10SeverityChange > 0 ||
 		humiditySeverityChange > 0 ||
 		temperatureSeverityChange > 0 ||
@@ -342,7 +357,8 @@ func (scheduler *InsightsScheduler) triggerFromReading(reading SensorReading) st
 		pm10Delta >= scheduler.config.PM10DeltaTrigger ||
 		movedFurtherFromComfort(windowReference.Humidity, reading.Humidity, scheduler.config.HumidityLowThreshold, scheduler.config.HumidityHighThreshold, scheduler.config.HumidityDeltaTrigger) ||
 		movedFurtherFromComfort(windowReference.Temperature, reading.Temperature, scheduler.config.TemperatureLowThreshold, scheduler.config.TemperatureHighThreshold, scheduler.config.TemperatureDeltaTrigger)
-	improving := pm2SeverityChange < 0 ||
+	improving := (!previousPMAvailable && currentPMAvailable) ||
+		pm2SeverityChange < 0 ||
 		pm10SeverityChange < 0 ||
 		humiditySeverityChange < 0 ||
 		temperatureSeverityChange < 0 ||
@@ -377,6 +393,15 @@ func (scheduler *InsightsScheduler) triggerFromReading(reading SensorReading) st
 
 func readingsFromDifferentDevices(previous, current SensorReading) bool {
 	return previous.DeviceID != "" && current.DeviceID != "" && previous.DeviceID != current.DeviceID
+}
+
+func firstAvailableParticulateReading(readings []SensorReading) (SensorReading, bool) {
+	for _, reading := range readings {
+		if particulateAvailable(reading) {
+			return reading, true
+		}
+	}
+	return SensorReading{}, false
 }
 
 func (scheduler *InsightsScheduler) recordRecentReading(reading SensorReading) SensorReading {

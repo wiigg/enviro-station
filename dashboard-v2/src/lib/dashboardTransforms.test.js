@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { WINDOW_OPTIONS_BY_ID } from "./dashboardConfig";
 import {
+  buildTrendChartData,
   buildHistoryUrl,
   downsampleReadings,
   mergeReadingsForWindow,
@@ -21,6 +22,19 @@ describe("dashboard transforms", () => {
     expect(sampled[0]).toBe(readings[0]);
     expect(sampled.at(-1)).toBe(readings.at(-1));
     expect(sampled.some((item) => item.pm2 === 100)).toBe(true);
+  });
+
+  it("excludes unavailable particle readings from rolling averages", () => {
+    const readings = [
+      { timestamp: 1_000, pm2: 10, temperature: 20 },
+      { timestamp: 2_000, pm2: null, temperature: 22 },
+      { timestamp: 3_000, pm2: 20, temperature: 24 }
+    ];
+    const chartData = buildTrendChartData(readings, readings, 10_000);
+
+    expect(chartData[1].pm2Average).toBe(10);
+    expect(chartData[2].pm2Average).toBe(15);
+    expect(chartData[2].temperatureAverage).toBe(22);
   });
 
   it("builds bounded history requests for persisted windows", () => {

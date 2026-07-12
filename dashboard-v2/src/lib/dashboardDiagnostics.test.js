@@ -16,6 +16,7 @@ function diagnostics(overrides = {}) {
     isLoadingInsights: false,
     lastError: "",
     lastReadingAt: now - 20_000,
+    particulateAvailable: true,
     now,
     ...overrides
   });
@@ -27,9 +28,19 @@ describe("buildDashboardDiagnostics", () => {
 
     expect(result.summary).toBe("All checks passing");
     expect(result.tone).toBe("ok");
-    expect(result.checks).toHaveLength(3);
+    expect(result.checks).toHaveLength(4);
     expect(result.checks.every((check) => check.state === "ok")).toBe(true);
     expect(result.checks.every((check) => check.action === "")).toBe(true);
+  });
+
+  it("reports unavailable particle readings without treating cached values as live", () => {
+    const result = diagnostics({ particulateAvailable: false });
+    const particulate = result.checks.find((check) => check.id === "particulate");
+
+    expect(result.summary).toBe("1 action needed");
+    expect(particulate.state).toBe("error");
+    expect(particulate.summary).toContain("cached values are excluded");
+    expect(particulate.action).toContain("PMS5003");
   });
 
   it("gives a specific recovery action when telemetry is stale", () => {

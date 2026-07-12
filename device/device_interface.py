@@ -104,6 +104,7 @@ class DeviceInterface:
             "oxidised": "{:.2f}".format(self.gas.oxidising / 1000),
             "reduced": "{:.2f}".format(self.gas.reducing / 1000),
             "nh3": "{:.2f}".format(self.gas.nh3 / 1000),
+            "pm_available": False,
         }
         values.update(self.last_pm_values)
 
@@ -116,6 +117,7 @@ class DeviceInterface:
                     "pm10": str(pm_values.pm_ug_per_m3(10)),
                 }
                 values.update(self.last_pm_values)
+                values["pm_available"] = True
                 break  # if no exception, break the loop
             except (ReadTimeoutError, SerialTimeoutError, ChecksumMismatchError):
                 logging.info("Failed to read PMS5003. Resetting and retrying.")
@@ -192,7 +194,7 @@ class DeviceInterface:
         return serial_number[-8:]
 
     def _display_alert_state(self, values, wifi_connected):
-        if not wifi_connected:
+        if not wifi_connected or values.get("pm_available") is False:
             return "alert"
         pm2 = self._numeric_value(values, "pm2")
         pm10 = self._numeric_value(values, "pm10")
@@ -203,6 +205,8 @@ class DeviceInterface:
         return "ok"
 
     def _format_metric(self, values, key, decimals, suffix=""):
+        if key in ("pm1", "pm2", "pm10") and values.get("pm_available") is False:
+            return "--"
         value = self._numeric_value(values, key)
         if value is None:
             return "--"

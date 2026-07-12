@@ -157,12 +157,42 @@ func TestNormalizeAlertSeverityUsesDashboardThresholds(t *testing.T) {
 	}
 
 	actionPM := alertSummary{
+		ParticulateAvailable: true,
 		Latest: metricSnapshot{
 			PM2: 16.0,
 		},
 	}
 	if got := normalizeAlertSeverity("air_quality", "warn", actionPM, thresholds); got != "critical" {
 		t.Fatalf("expected action PM to normalize to critical, got %q", got)
+	}
+}
+
+func TestUnavailableParticulateDataIsExcludedFromSummaryAndFallback(t *testing.T) {
+	summary := buildAlertSummary([]SensorReading{
+		{Timestamp: 1738886400, Temperature: 21, Humidity: 45, PM2: 5, PM10: 8},
+		{
+			Timestamp:   1738887000,
+			Temperature: 21.2,
+			Humidity:    45.4,
+			PM2:         100,
+			PM10:        120,
+			PMAvailable: boolPtr(false),
+		},
+	})
+
+	if summary.ParticulateAvailable {
+		t.Fatal("expected latest particulate state to be unavailable")
+	}
+	if summary.ParticulateSamples != 1 {
+		t.Fatalf("expected one valid particulate sample, got %d", summary.ParticulateSamples)
+	}
+	if summary.Latest.PM2 != 0 || summary.Delta10m.PM2 != 0 {
+		t.Fatalf("expected unavailable PM values to be excluded, got latest %.1f delta %.1f", summary.Latest.PM2, summary.Delta10m.PM2)
+	}
+
+	alert := fallbackStableAlertFromSummary(summary)
+	if strings.Contains(alert.Message, "PM2.5") || !strings.Contains(alert.Message, "unavailable") {
+		t.Fatalf("expected fallback to disclose unavailable PM data, got %q", alert.Message)
 	}
 }
 

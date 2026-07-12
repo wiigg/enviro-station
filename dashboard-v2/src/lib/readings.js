@@ -52,6 +52,16 @@ export function normalizeReading(raw) {
     output.deviceId = raw.device_id.trim();
   }
 
+  output.pmAvailable = raw.pm_available !== false;
+  if (!output.pmAvailable) {
+    output.pm1 = null;
+    output.pm2 = null;
+    output.pm10 = null;
+    output.pm1Max = null;
+    output.pm2Max = null;
+    output.pm10Max = null;
+  }
+
   return output;
 }
 
@@ -84,17 +94,21 @@ export function buildKpis(readings, windowId = "live") {
   return [
     {
       label: "PM2.5",
-      value: latest.pm2.toFixed(1),
+      value: latest.pmAvailable ? latest.pm2.toFixed(1) : "--",
       unit: "µg/m³",
-      trend: metricTrend(readings, samples, latest, "pm2", "µg/m³", 1, windowId),
-      state: severityForPM25(latest.pm2)
+      trend: latest.pmAvailable
+        ? metricTrend(readings, samples, latest, "pm2", "µg/m³", 1, windowId)
+        : "Sensor unavailable",
+      state: latest.pmAvailable ? severityForPM25(latest.pm2) : "muted"
     },
     {
       label: "PM10",
-      value: latest.pm10.toFixed(1),
+      value: latest.pmAvailable ? latest.pm10.toFixed(1) : "--",
       unit: "µg/m³",
-      trend: metricTrend(readings, samples, latest, "pm10", "µg/m³", 1, windowId),
-      state: severityForPM10(latest.pm10)
+      trend: latest.pmAvailable
+        ? metricTrend(readings, samples, latest, "pm10", "µg/m³", 1, windowId)
+        : "Sensor unavailable",
+      state: latest.pmAvailable ? severityForPM10(latest.pm10) : "muted"
     },
     {
       label: "Temp",
@@ -122,7 +136,7 @@ function average(values) {
 
 function metricTrend(readings, samples, latest, field, unit, decimals, windowId) {
   if (windowId === "live") {
-    const recentBaseline = average(samples.map((item) => item[field]));
+    const recentBaseline = average(finiteFieldValues(samples, field));
     if (Number.isFinite(recentBaseline)) {
       return describeDelta(latest[field] - recentBaseline, unit, decimals, "recently");
     }
@@ -212,7 +226,12 @@ function metricTrend(readings, samples, latest, field, unit, decimals, windowId)
     }
   }
 
-  const oldestVisibleReading = oldestReadingForWindow(readings, latest.timestamp, windowId);
+  const oldestVisibleReading = oldestReadingForWindow(
+    readings,
+    latest.timestamp,
+    windowId,
+    field
+  );
   if (oldestVisibleReading && oldestVisibleReading.timestamp < latest.timestamp) {
     const fallbackReferenceLabel =
       windowId === "1h"
@@ -227,7 +246,7 @@ function metricTrend(readings, samples, latest, field, unit, decimals, windowId)
     );
   }
 
-  const baseline = average(samples.map((item) => item[field]));
+  const baseline = average(finiteFieldValues(samples, field));
   if (!Number.isFinite(baseline)) {
     return "Waiting for baseline";
   }
@@ -311,9 +330,9 @@ function readingsForWindow(readings, latestTimestamp, windowId) {
   return readings.filter((reading) => reading.timestamp >= cutoffTimestamp);
 }
 
-function oldestReadingForWindow(readings, latestTimestamp, windowId) {
+function oldestReadingForWindow(readings, latestTimestamp, windowId, field) {
   const visibleReadings = readingsForWindow(readings, latestTimestamp, windowId);
-  return visibleReadings[0] ?? null;
+  return visibleReadings.find((reading) => Number.isFinite(reading[field])) ?? null;
 }
 
 function rangeForWindow(windowId) {
@@ -355,11 +374,16 @@ function formatElapsedLabel(value, unit) {
 function averageFieldInWindow(readings, startInclusive, endExclusive, field) {
   const values = readings
     .filter((reading) => reading.timestamp >= startInclusive && reading.timestamp < endExclusive)
-    .map((reading) => reading[field]);
+    .map((reading) => reading[field])
+    .filter(Number.isFinite);
 
   if (values.length < MIN_BUCKET_SAMPLES) {
     return Number.NaN;
   }
 
   return average(values);
+}
+
+function finiteFieldValues(readings, field) {
+  return readings.map((reading) => reading[field]).filter(Number.isFinite);
 }

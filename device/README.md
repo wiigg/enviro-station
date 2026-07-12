@@ -85,6 +85,9 @@ no dashboard is connected. The default keeps gating disabled so a newly opened
 dashboard always has a recent live reading.
 Readings include the Raspberry Pi serial number as `device_id` so backend batch
 retries are idempotent per device.
+Readings also include `pm_available`. After both PMS5003 attempts fail, cached
+values remain in the transport payload for compatibility but are marked unavailable;
+the backend and dashboard exclude them from particulate monitoring and insights.
 Durable writes are queued locally and flushed to Postgres in timed batches.
 If the backend is unavailable, queued readings are retried on the next flush.
 The device display uses a black background for normal readings and dark red only

@@ -37,6 +37,7 @@ Range mode notes:
 - range results are time-bucketed aggregates for one device, not raw row samples
 - if `device_id` is omitted, range mode uses the latest device found in the requested window
 - particulate buckets return averages in `pm1`/`pm2`/`pm10` and peaks in `pm1_max`/`pm2_max`/`pm10_max`
+- `pm_available=false` marks cached PMS5003 fallback values; range aggregation excludes them from particulate averages and peaks
 - comfort and gas buckets use averages
 
 ## Environment
@@ -133,6 +134,7 @@ Insights are precomputed in the backend, not generated per request.
 - Live readings trigger recompute checks and are used for analysis when newer than durable history
 - Delayed or duplicate batch readings do not rewind the event baseline
 - Live-triggered recomputes avoid durable reads so realtime dashboards do not wake Neon for AI copy alone
+- PMS5003 availability changes refresh insights; unavailable particulate samples are excluded from PM analysis
 - `/api/insights` returns the latest stored snapshot
 - Durable-analysis snapshots are persisted in Postgres and restored on backend restart
 - Live-only event snapshots stay in memory until the next durable recompute
