@@ -46,6 +46,12 @@ func WithInsightsLiveReadings(source func(limit int) []SensorReading) InsightsSc
 	}
 }
 
+func WithInsightsOutdoorContext(source OutdoorContextSource) InsightsSchedulerOption {
+	return func(scheduler *InsightsScheduler) {
+		scheduler.outdoorContext = source
+	}
+}
+
 type InsightsSchedulerConfig struct {
 	AnalysisLimit            int
 	RefreshInterval          time.Duration
@@ -66,8 +72,8 @@ type InsightsSchedulerConfig struct {
 func DefaultInsightsSchedulerConfig() InsightsSchedulerConfig {
 	return InsightsSchedulerConfig{
 		AnalysisLimit:            900,
-		RefreshInterval:          6 * time.Hour,
-		EventMinInterval:         10 * time.Minute,
+		RefreshInterval:          12 * time.Hour,
+		EventMinInterval:         30 * time.Minute,
 		PM2Threshold:             8.0,
 		PM10Threshold:            30.0,
 		PM2DeltaTrigger:          5.0,
@@ -78,16 +84,17 @@ func DefaultInsightsSchedulerConfig() InsightsSchedulerConfig {
 		TemperatureLowThreshold:  18.0,
 		TemperatureHighThreshold: 26.0,
 		TemperatureDeltaTrigger:  1.5,
-		AnalyzeTimeout:           15 * time.Second,
+		AnalyzeTimeout:           40 * time.Second,
 	}
 }
 
 type InsightsScheduler struct {
-	store         Store
-	snapshotStore InsightsSnapshotStore
-	analyzer      AlertAnalyzer
-	config        InsightsSchedulerConfig
-	liveReadings  func(limit int) []SensorReading
+	store          Store
+	snapshotStore  InsightsSnapshotStore
+	analyzer       AlertAnalyzer
+	config         InsightsSchedulerConfig
+	liveReadings   func(limit int) []SensorReading
+	outdoorContext OutdoorContextSource
 
 	mu                   sync.RWMutex
 	snapshot             InsightsSnapshot
@@ -174,6 +181,11 @@ func (scheduler *InsightsScheduler) Start(ctx context.Context) {
 	scheduler.loadSnapshotFromStore()
 	if scheduler.needsScheduledRefresh(time.Now()) {
 		scheduler.requestRecompute("startup")
+	}
+	if monitor, ok := scheduler.outdoorContext.(OutdoorContextMonitor); ok {
+		monitor.Start(ctx, func() {
+			scheduler.requestRecompute("outdoor")
+		})
 	}
 
 	go func() {
@@ -292,6 +304,11 @@ func (scheduler *InsightsScheduler) triggerFromReading(reading SensorReading) st
 		scheduler.recentReadings = []SensorReading{reading}
 		if !scheduler.hasSnapshot {
 			return "warmup"
+		}
+		if scheduler.outdoorContext != nil {
+			if _, ok := scheduler.outdoorContext.Snapshot(); ok {
+				return "outdoor"
+			}
 		}
 		return ""
 	}
@@ -518,6 +535,8 @@ func triggerPriority(trigger string) int {
 	switch trigger {
 	case "event":
 		return 3
+	case "outdoor":
+		return 2
 	case "warmup":
 		return 2
 	case "startup":
@@ -617,7 +636,7 @@ func (scheduler *InsightsScheduler) analysisReadings(
 		}
 		return nil, insightsAnalysisSourceDurable, ErrStoreUnavailable
 	}
-	if (trigger == "event" || trigger == "warmup") && len(liveReadings) > 0 {
+	if (trigger == "event" || trigger == "warmup" || trigger == "outdoor") && len(liveReadings) > 0 {
 		return liveReadings, insightsAnalysisSourceLive, nil
 	}
 

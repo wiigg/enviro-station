@@ -77,16 +77,17 @@ func main() {
 
 	openAIAPIKey := strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
 	if openAIAPIKey != "" {
-		insightsModel := envOrDefault("OPENAI_INSIGHTS_MODEL", "gpt-5.6-terra")
-		insightsReasoningEffort := envOrDefault("OPENAI_INSIGHTS_REASONING_EFFORT", "low")
+		insightsModel := envOrDefault("OPENAI_INSIGHTS_MODEL", "gpt-5.6-luna")
+		insightsReasoningEffort := envOrDefault("OPENAI_INSIGHTS_REASONING_EFFORT", "medium")
 		insightsBaseURL := envOrDefault("OPENAI_BASE_URL", "https://api.openai.com/v1")
 		insightsMax := intOrDefault("OPENAI_INSIGHTS_MAX", 3)
 		insightsAnalysisLimit := intOrDefault("OPENAI_INSIGHTS_ANALYSIS_LIMIT", 900)
-		insightsRefreshInterval := durationOrDefault("OPENAI_INSIGHTS_REFRESH_INTERVAL", 6*time.Hour)
+		insightsRefreshInterval := durationOrDefault("OPENAI_INSIGHTS_REFRESH_INTERVAL", 12*time.Hour)
 		insightsEventMinInterval := durationOrDefault(
 			"OPENAI_INSIGHTS_EVENT_MIN_INTERVAL",
-			10*time.Minute,
+			30*time.Minute,
 		)
+		insightsDailyLimit := intOrDefault("OPENAI_INSIGHTS_DAILY_LIMIT", 8)
 		insightsPM2Trigger := floatOrDefault("OPENAI_INSIGHTS_PM2_TRIGGER", 8.0)
 		insightsPM10Trigger := floatOrDefault("OPENAI_INSIGHTS_PM10_TRIGGER", 30.0)
 		insightsPM2DeltaTrigger := floatOrDefault("OPENAI_INSIGHTS_PM2_DELTA_TRIGGER", 5.0)
@@ -97,26 +98,60 @@ func main() {
 		insightsTemperatureLowTrigger := floatOrDefault("OPENAI_INSIGHTS_TEMPERATURE_LOW_TRIGGER", 18.0)
 		insightsTemperatureHighTrigger := floatOrDefault("OPENAI_INSIGHTS_TEMPERATURE_HIGH_TRIGGER", 26.0)
 		insightsTemperatureDeltaTrigger := floatOrDefault("OPENAI_INSIGHTS_TEMPERATURE_DELTA_TRIGGER", 1.5)
-		insightsAnalyzeTimeout := durationOrDefault("OPENAI_INSIGHTS_ANALYZE_TIMEOUT", 15*time.Second)
+		insightsAnalyzeTimeout := durationOrDefault("OPENAI_INSIGHTS_ANALYZE_TIMEOUT", 40*time.Second)
+		outdoorLocation := strings.TrimSpace(os.Getenv("OUTDOOR_LOCATION"))
 
-		alertAnalyzer := server.NewOpenAIAlertAnalyzer(
-			openAIAPIKey,
-			insightsModel,
-			insightsReasoningEffort,
-			insightsBaseURL,
+		thresholds := server.AlertThresholds{
+			PM2Threshold:             insightsPM2Trigger,
+			PM10Threshold:            insightsPM10Trigger,
+			PM2DeltaTrigger:          insightsPM2DeltaTrigger,
+			PM10DeltaTrigger:         insightsPM10DeltaTrigger,
+			HumidityLowThreshold:     insightsHumidityLowTrigger,
+			HumidityHighThreshold:    insightsHumidityHighTrigger,
+			HumidityDeltaTrigger:     insightsHumidityDeltaTrigger,
+			TemperatureLowThreshold:  insightsTemperatureLowTrigger,
+			TemperatureHighThreshold: insightsTemperatureHighTrigger,
+			TemperatureDeltaTrigger:  insightsTemperatureDeltaTrigger,
+		}
+		var alertAnalyzer server.AlertAnalyzer
+		if outdoorLocation != "" {
+			outdoorProvider := server.NewOpenAIOutdoorProvider(server.OutdoorSearchConfig{
+				APIKey:          openAIAPIKey,
+				Model:           envOrDefault("OPENAI_OUTDOOR_MODEL", insightsModel),
+				ReasoningEffort: envOrDefault("OPENAI_OUTDOOR_REASONING_EFFORT", insightsReasoningEffort),
+				BaseURL:         insightsBaseURL,
+				Location:        outdoorLocation,
+				RefreshInterval: durationOrDefault("OPENAI_OUTDOOR_REFRESH_INTERVAL", 2*time.Hour),
+				MaxAge:          durationOrDefault("OPENAI_OUTDOOR_MAX_AGE", 90*time.Minute),
+				RequestTimeout:  durationOrDefault("OPENAI_OUTDOOR_REQUEST_TIMEOUT", 20*time.Second),
+				DailyLimit:      intOrDefault("OPENAI_OUTDOOR_DAILY_LIMIT", 12),
+			})
+			alertAnalyzer = server.NewOpenAIAlertAnalyzerWithOutdoor(
+				openAIAPIKey,
+				insightsModel,
+				insightsReasoningEffort,
+				insightsBaseURL,
+				insightsMax,
+				thresholds,
+				outdoorProvider,
+			)
+			options = append(options, server.WithOutdoorContext(outdoorProvider))
+			log.Printf("outdoor context enabled refresh_interval=%s", durationOrDefault("OPENAI_OUTDOOR_REFRESH_INTERVAL", 2*time.Hour))
+		} else {
+			alertAnalyzer = server.NewOpenAIAlertAnalyzer(
+				openAIAPIKey,
+				insightsModel,
+				insightsReasoningEffort,
+				insightsBaseURL,
+				insightsMax,
+				thresholds,
+			)
+		}
+		alertAnalyzer = server.NewDailyLimitedAlertAnalyzer(
+			alertAnalyzer,
+			insightsDailyLimit,
 			insightsMax,
-			server.AlertThresholds{
-				PM2Threshold:             insightsPM2Trigger,
-				PM10Threshold:            insightsPM10Trigger,
-				PM2DeltaTrigger:          insightsPM2DeltaTrigger,
-				PM10DeltaTrigger:         insightsPM10DeltaTrigger,
-				HumidityLowThreshold:     insightsHumidityLowTrigger,
-				HumidityHighThreshold:    insightsHumidityHighTrigger,
-				HumidityDeltaTrigger:     insightsHumidityDeltaTrigger,
-				TemperatureLowThreshold:  insightsTemperatureLowTrigger,
-				TemperatureHighThreshold: insightsTemperatureHighTrigger,
-				TemperatureDeltaTrigger:  insightsTemperatureDeltaTrigger,
-			},
+			thresholds,
 		)
 		options = append(
 			options,

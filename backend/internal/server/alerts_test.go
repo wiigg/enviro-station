@@ -10,10 +10,11 @@ import (
 	"unicode/utf8"
 )
 
-func TestOpenAIAlertAnalyzerUsesTerraWithLowReasoningByDefault(t *testing.T) {
+func TestOpenAIAlertAnalyzerUsesLunaWithMediumReasoningByDefault(t *testing.T) {
 	var requestPayload struct {
-		Model     string `json:"model"`
-		Reasoning struct {
+		Model           string `json:"model"`
+		MaxOutputTokens int    `json:"max_output_tokens"`
+		Reasoning       struct {
 			Effort string `json:"effort"`
 		} `json:"reasoning"`
 	}
@@ -42,11 +43,104 @@ func TestOpenAIAlertAnalyzerUsesTerraWithLowReasoningByDefault(t *testing.T) {
 		t.Fatalf("analyze: %v", err)
 	}
 
-	if requestPayload.Model != "gpt-5.6-terra" {
-		t.Fatalf("expected gpt-5.6-terra, got %q", requestPayload.Model)
+	if requestPayload.Model != "gpt-5.6-luna" {
+		t.Fatalf("expected gpt-5.6-luna, got %q", requestPayload.Model)
 	}
-	if requestPayload.Reasoning.Effort != "low" {
-		t.Fatalf("expected low reasoning effort, got %q", requestPayload.Reasoning.Effort)
+	if requestPayload.Reasoning.Effort != "medium" {
+		t.Fatalf("expected medium reasoning effort, got %q", requestPayload.Reasoning.Effort)
+	}
+	if requestPayload.MaxOutputTokens != insightsMaxOutputTokens {
+		t.Fatalf("expected output limit %d, got %d", insightsMaxOutputTokens, requestPayload.MaxOutputTokens)
+	}
+}
+
+func TestDailyLimitedAnalyzerUsesDeterministicInsightsAfterLimit(t *testing.T) {
+	delegate := &fakeAlertAnalyzer{alerts: []Alert{{
+		Topic: "general", Kind: "insight", Severity: "info", Title: "AI", Message: "Generated.",
+	}}}
+	analyzer := NewDailyLimitedAlertAnalyzer(delegate, 1, 3, defaultAlertThresholds())
+	readings := []SensorReading{{Timestamp: 1738886400, PM2: 12, PM10: 5, Humidity: 45, Temperature: 22}}
+
+	if _, err := analyzer.Analyze(context.Background(), readings); err != nil {
+		t.Fatalf("first analysis: %v", err)
+	}
+	alerts, err := analyzer.Analyze(context.Background(), readings)
+	if err != nil {
+		t.Fatalf("fallback analysis: %v", err)
+	}
+	if delegate.calls != 1 {
+		t.Fatalf("expected one OpenAI call, got %d", delegate.calls)
+	}
+	if len(alerts) != 1 || alerts[0].Topic != "air_quality" {
+		t.Fatalf("expected deterministic threshold insight, got %#v", alerts)
+	}
+	if analyzer.Source() != "rules" {
+		t.Fatalf("expected deterministic source after budget exhaustion, got %q", analyzer.Source())
+	}
+}
+
+func TestSystemPromptDefinesWhenOutdoorContextIsUseful(t *testing.T) {
+	prompt := systemPrompt(3, defaultAlertThresholds())
+	for _, expected := range []string{
+		"only in an air_quality insight",
+		"or in a temperature insight",
+		"Never use outdoor context for humidity",
+		"If outdoor context does not change the recommended action, ignore it",
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("expected outdoor-context instruction %q", expected)
+		}
+	}
+}
+
+type staticOutdoorContext struct {
+	conditions OutdoorConditions
+}
+
+func (source staticOutdoorContext) Snapshot() (OutdoorConditions, bool) {
+	return source.conditions, true
+}
+
+func TestOpenAIAlertAnalyzerAttachesSourcesOnlyWhenOutdoorContextIsUsed(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{"output_text":"{\"alerts\":[{\"topic\":\"temperature\",\"kind\":\"tip\",\"severity\":\"info\",\"title\":\"Cooler air outside\",\"message\":\"Outdoor air is cooler, so brief ventilation may help.\",\"uses_outdoor_context\":true}]}"}`))
+	}))
+	defer server.Close()
+
+	outdoorTemperature := 15.0
+	analyzer := NewOpenAIAlertAnalyzerWithOutdoor(
+		"test-key",
+		"test-model",
+		"low",
+		server.URL,
+		1,
+		defaultAlertThresholds(),
+		staticOutdoorContext{conditions: OutdoorConditions{
+			TemperatureC:       &outdoorTemperature,
+			AirQualityCategory: "good",
+			Sources: []AlertSource{{
+				Title: "Met Office",
+				URL:   "https://www.metoffice.gov.uk/",
+			}},
+		}},
+	)
+
+	alerts, err := analyzer.Analyze(context.Background(), []SensorReading{{
+		Timestamp:   1738886400,
+		Temperature: 27,
+		Humidity:    45,
+		PM2:         3,
+		PM10:        5,
+	}})
+	if err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+	if len(alerts) != 1 || len(alerts[0].Sources) != 1 {
+		t.Fatalf("expected outdoor source on insight, got %#v", alerts)
+	}
+	if alerts[0].Sources[0].Title != "Met Office" {
+		t.Fatalf("unexpected outdoor source: %#v", alerts[0].Sources[0])
 	}
 }
 

@@ -47,6 +47,7 @@ type API struct {
 	alertAnalyzer           AlertAnalyzer
 	insightsEngine          InsightsEngine
 	insightsSchedulerConfig InsightsSchedulerConfig
+	outdoorContext          OutdoorContextSource
 	opsEventStore           OpsEventStore
 	opsConfig               OpsConfig
 
@@ -74,6 +75,12 @@ func WithInsightsEngine(engine InsightsEngine) APIOption {
 func WithInsightsSchedulerConfig(config InsightsSchedulerConfig) APIOption {
 	return func(api *API) {
 		api.insightsSchedulerConfig = config
+	}
+}
+
+func WithOutdoorContext(source OutdoorContextSource) APIOption {
+	return func(api *API) {
+		api.outdoorContext = source
 	}
 }
 
@@ -130,6 +137,7 @@ func NewAPI(store Store, ingestAPIKey string, options ...APIOption) *API {
 			api.alertAnalyzer,
 			api.insightsSchedulerConfig,
 			WithInsightsLiveReadings(api.live.latest),
+			WithInsightsOutdoorContext(api.outdoorContext),
 		)
 		scheduler.Start(context.Background())
 		api.insightsEngine = scheduler

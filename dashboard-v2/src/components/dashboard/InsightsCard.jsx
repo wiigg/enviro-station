@@ -58,6 +58,18 @@ export default memo(function InsightsCard({
               <div>
                 <p className="insightTitle">{insight.title}</p>
                 <p className="insightMessage">{insight.message}</p>
+                {insight.sources?.length ? (
+                  <p className="insightSources">
+                    Sources: {insight.sources.map((source, index) => (
+                      <span key={source.url}>
+                        {index > 0 ? " · " : ""}
+                        <a href={source.url} target="_blank" rel="noreferrer">
+                          {source.title}
+                        </a>
+                      </span>
+                    ))}
+                  </p>
+                ) : null}
               </div>
             </li>
           ))}

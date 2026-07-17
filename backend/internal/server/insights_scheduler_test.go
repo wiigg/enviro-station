@@ -40,6 +40,30 @@ func TestFirstReadingRequestsWarmupWithoutReportingAnEvent(t *testing.T) {
 	}
 }
 
+func TestFirstReadingRefreshesRestoredSnapshotWhenOutdoorContextIsReady(t *testing.T) {
+	scheduler := NewInsightsScheduler(
+		&fakeStore{},
+		&fakeAlertAnalyzer{},
+		testInsightsSchedulerConfig(),
+		WithInsightsOutdoorContext(staticOutdoorContext{conditions: OutdoorConditions{
+			AirQualityCategory: "good",
+		}}),
+	)
+	scheduler.hasSnapshot = true
+
+	trigger := scheduler.triggerFromReading(SensorReading{
+		Timestamp:   1738886400,
+		Temperature: 22,
+		Humidity:    45,
+		PM2:         3,
+		PM10:        5,
+	})
+
+	if trigger != "outdoor" {
+		t.Fatalf("expected first reading to refresh restored insight with outdoor context, got %q", trigger)
+	}
+}
+
 func TestShouldTriggerFromReadingUsesRollingTenMinuteChange(t *testing.T) {
 	scheduler := NewInsightsScheduler(&fakeStore{}, &fakeAlertAnalyzer{}, testInsightsSchedulerConfig())
 	baseTimestamp := int64(1738886400)
@@ -127,6 +151,21 @@ func TestSeverityEscalationBypassesMaterialChangeCooldown(t *testing.T) {
 	}
 	if !scheduler.shouldTriggerFromReading(SensorReading{Timestamp: baseTimestamp + 120, PM2: 15.1, PM10: 5}) {
 		t.Fatalf("expected critical escalation inside cooldown to trigger")
+	}
+}
+
+func TestWarningThresholdClearBypassesMaterialChangeCooldown(t *testing.T) {
+	config := testInsightsSchedulerConfig()
+	config.PM2Threshold = 8
+	scheduler := NewInsightsScheduler(&fakeStore{}, &fakeAlertAnalyzer{}, config)
+	baseTimestamp := int64(1738886400)
+
+	scheduler.shouldTriggerFromReading(SensorReading{Timestamp: baseTimestamp, PM2: 7, PM10: 5})
+	if !scheduler.shouldTriggerFromReading(SensorReading{Timestamp: baseTimestamp + 60, PM2: 8.1, PM10: 5}) {
+		t.Fatal("expected crossing above warning threshold to trigger")
+	}
+	if !scheduler.shouldTriggerFromReading(SensorReading{Timestamp: baseTimestamp + 120, PM2: 7.9, PM10: 5}) {
+		t.Fatal("expected crossing back below warning threshold to trigger inside cooldown")
 	}
 }
 

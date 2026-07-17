@@ -57,13 +57,14 @@ Range mode notes:
 - `TRUST_PROXY_HEADERS` (default: `false`)
 - `LIVE_BUFFER_LIMIT` (default: `3600`)
 - `OPENAI_API_KEY` (optional; enables `/api/insights`)
-- `OPENAI_INSIGHTS_MODEL` (default: `gpt-5.6-terra`)
-- `OPENAI_INSIGHTS_REASONING_EFFORT` (default: `low`)
+- `OPENAI_INSIGHTS_MODEL` (default: `gpt-5.6-luna`)
+- `OPENAI_INSIGHTS_REASONING_EFFORT` (default: `medium`)
 - `OPENAI_BASE_URL` (default: `https://api.openai.com/v1`)
 - `OPENAI_INSIGHTS_MAX` (default: `3`; hard-capped at `3`)
 - `OPENAI_INSIGHTS_ANALYSIS_LIMIT` (default: `900`)
-- `OPENAI_INSIGHTS_REFRESH_INTERVAL` (default: `6h`; maximum age before a scheduled refresh)
-- `OPENAI_INSIGHTS_EVENT_MIN_INTERVAL` (default: `10m`)
+- `OPENAI_INSIGHTS_REFRESH_INTERVAL` (default: `12h`; maximum age before a scheduled refresh)
+- `OPENAI_INSIGHTS_EVENT_MIN_INTERVAL` (default: `30m`; threshold crossings still refresh immediately)
+- `OPENAI_INSIGHTS_DAILY_LIMIT` (default: `8`; deterministic insights continue after the OpenAI limit)
 - `OPENAI_INSIGHTS_PM2_TRIGGER` (default: `8`)
 - `OPENAI_INSIGHTS_PM10_TRIGGER` (default: `30`)
 - `OPENAI_INSIGHTS_PM2_DELTA_TRIGGER` (default: `5`; 10 minute material-change threshold)
@@ -74,7 +75,14 @@ Range mode notes:
 - `OPENAI_INSIGHTS_TEMPERATURE_LOW_TRIGGER` (default: `18`)
 - `OPENAI_INSIGHTS_TEMPERATURE_HIGH_TRIGGER` (default: `26`)
 - `OPENAI_INSIGHTS_TEMPERATURE_DELTA_TRIGGER` (default: `1.5`; 10 minute material-change threshold)
-- `OPENAI_INSIGHTS_ANALYZE_TIMEOUT` (default: `15s`)
+- `OPENAI_INSIGHTS_ANALYZE_TIMEOUT` (default: `40s`; covers an optional cache-miss outdoor search plus insight generation)
+- `OUTDOOR_LOCATION` (optional backend-only secret; enables outdoor weather and air-quality context, e.g. a UK postcode)
+- `OPENAI_OUTDOOR_MODEL` (default: `OPENAI_INSIGHTS_MODEL`)
+- `OPENAI_OUTDOOR_REASONING_EFFORT` (default: `OPENAI_INSIGHTS_REASONING_EFFORT`)
+- `OPENAI_OUTDOOR_REFRESH_INTERVAL` (default: `2h`)
+- `OPENAI_OUTDOOR_MAX_AGE` (default: `90m`; older context is excluded from insights)
+- `OPENAI_OUTDOOR_REQUEST_TIMEOUT` (default: `20s`)
+- `OPENAI_OUTDOOR_DAILY_LIMIT` (default: `12`; includes scheduled and on-demand searches)
 - `RETENTION_ENABLED` (default: `true`)
 - `RETENTION_RUN_ON_START` (default: `true`; set `false` when database connection is lazy)
 - `RETENTION_DAYS` (default: `14`)
@@ -135,6 +143,11 @@ Insights are precomputed in the backend, not generated per request.
 - Delayed or duplicate batch readings do not rewind the event baseline
 - Live-triggered recomputes avoid durable reads so realtime dashboards do not wake Neon for AI copy alone
 - PMS5003 availability changes refresh insights; unavailable particulate samples are excluded from PM analysis
+- Outdoor context is fetched server-side every two hours and cached in memory: Postcodes.io resolves the configured UK postcode, Open-Meteo supplies the current temperature, and cost-capped OpenAI web search supplies official UK air-quality context
+- Temperature timestamps must be current and search-supplied temperature values are ignored, preventing hourly forecast rows from being misaligned
+- OpenAI insight calls are capped per UTC day; deterministic threshold insights continue immediately after that budget is exhausted
+- Only material outdoor changes trigger a new insight; source links are attached only when an insight uses outdoor context
+- `OUTDOOR_LOCATION` is never returned by an API endpoint or included in browser requests; location and weather lookups happen only from the backend
 - `/api/insights` returns the latest stored snapshot
 - Durable-analysis snapshots are persisted in Postgres and restored on backend restart
 - Live-only event snapshots stay in memory until the next durable recompute

@@ -107,6 +107,9 @@ function insightTriggerLabel(trigger) {
   if (trigger === "interval") {
     return "scheduled check";
   }
+  if (trigger === "outdoor") {
+    return "outdoor change";
+  }
   if (trigger === "warmup" || trigger === "startup") {
     return "startup";
   }

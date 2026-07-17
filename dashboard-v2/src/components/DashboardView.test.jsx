@@ -132,4 +132,21 @@ describe("DashboardView", () => {
 
     expect(screen.getByText(message)).toBeVisible();
   });
+
+  it("renders clickable sources for outdoor-informed insights", () => {
+    renderDashboard(vi.fn(), [], [
+      {
+        id: "outdoor-tip",
+        topic: "temperature",
+        kind: "tip",
+        severity: "info",
+        title: "Cooler outside",
+        message: "Brief ventilation may help.",
+        sources: [{ title: "Met Office", url: "https://www.metoffice.gov.uk/" }]
+      }
+    ]);
+
+    const source = screen.getByRole("link", { name: "Met Office" });
+    expect(source).toHaveAttribute("href", "https://www.metoffice.gov.uk/");
+  });
 });

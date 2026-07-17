@@ -5,6 +5,7 @@ import {
   buildHistoryUrl,
   downsampleReadings,
   mergeReadingsForWindow,
+  normalizeInsight,
   normalizeOpsEvent
 } from "./dashboardTransforms";
 
@@ -108,5 +109,23 @@ describe("dashboard transforms", () => {
     });
 
     expect(first.id).not.toBe(second.id);
+  });
+
+  it("keeps only safe HTTPS insight sources", () => {
+    const insight = normalizeInsight({
+      topic: "temperature",
+      kind: "tip",
+      severity: "info",
+      title: "Cooler outside",
+      message: "Brief ventilation may help.",
+      sources: [
+        { title: "Met Office", url: "https://www.metoffice.gov.uk/weather" },
+        { title: "Unsafe", url: "http://example.com/source" }
+      ]
+    });
+
+    expect(insight.sources).toEqual([
+      { title: "Met Office", url: "https://www.metoffice.gov.uk/weather" }
+    ]);
   });
 });

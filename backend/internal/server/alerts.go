@@ -6,18 +6,28 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 	"unicode"
 )
 
 type Alert struct {
-	Topic    string `json:"topic,omitempty"`
-	Kind     string `json:"kind"`
-	Severity string `json:"severity"`
-	Title    string `json:"title"`
-	Message  string `json:"message"`
+	Topic              string        `json:"topic,omitempty"`
+	Kind               string        `json:"kind"`
+	Severity           string        `json:"severity"`
+	Title              string        `json:"title"`
+	Message            string        `json:"message"`
+	UsesOutdoorContext bool          `json:"uses_outdoor_context,omitempty"`
+	Sources            []AlertSource `json:"sources,omitempty"`
+}
+
+type AlertSource struct {
+	Title string `json:"title"`
+	URL   string `json:"url"`
 }
 
 type AlertAnalyzer interface {
@@ -47,6 +57,8 @@ const (
 	criticalTemperatureHighThreshold = 30.0
 	alertMessageMaxLength            = 320
 	secondsPerMinute                 = int64(60)
+	defaultInsightsDailyRequestLimit = 8
+	insightsMaxOutputTokens          = 1200
 )
 
 func defaultAlertThresholds() AlertThresholds {
@@ -66,7 +78,10 @@ func defaultAlertThresholds() AlertThresholds {
 
 func cloneAlerts(alerts []Alert) []Alert {
 	output := make([]Alert, len(alerts))
-	copy(output, alerts)
+	for index, alert := range alerts {
+		output[index] = alert
+		output[index].Sources = cloneAlertSources(alert.Sources)
+	}
 	return output
 }
 
@@ -78,6 +93,73 @@ type openAIAlertAnalyzer struct {
 	reasoningEffort string
 	maxAlerts       int
 	thresholds      AlertThresholds
+	outdoorContext  OutdoorContextSource
+}
+
+type dailyLimitedAlertAnalyzer struct {
+	analyzer   AlertAnalyzer
+	budget     *dailyRequestBudget
+	maxAlerts  int
+	thresholds AlertThresholds
+	mu         sync.RWMutex
+	lastSource string
+}
+
+func NewDailyLimitedAlertAnalyzer(
+	analyzer AlertAnalyzer,
+	dailyLimit int,
+	maxAlerts int,
+	thresholds AlertThresholds,
+) AlertAnalyzer {
+	if dailyLimit < 1 {
+		dailyLimit = defaultInsightsDailyRequestLimit
+	}
+	if maxAlerts < 1 || maxAlerts > maxInsightsLimit {
+		maxAlerts = maxInsightsLimit
+	}
+	return &dailyLimitedAlertAnalyzer{
+		analyzer:   analyzer,
+		budget:     newDailyRequestBudget(dailyLimit),
+		maxAlerts:  maxAlerts,
+		thresholds: thresholds,
+	}
+}
+
+func (analyzer *dailyLimitedAlertAnalyzer) Analyze(
+	ctx context.Context,
+	readings []SensorReading,
+) ([]Alert, error) {
+	if len(readings) == 0 {
+		return []Alert{}, nil
+	}
+	if analyzer.budget.take(time.Now()) {
+		alerts, err := analyzer.analyzer.Analyze(ctx, readings)
+		if err == nil {
+			analyzer.setSource(analyzer.analyzer.Source())
+		}
+		return alerts, err
+	}
+	if analyzer.budget.markExhaustionLogged() {
+		log.Printf("ai insight daily request limit reached; using deterministic insights")
+	}
+	analyzer.setSource("rules")
+	return fallbackAlerts(buildAlertSummary(readings), analyzer.maxAlerts, analyzer.thresholds), nil
+}
+
+func (analyzer *dailyLimitedAlertAnalyzer) Source() string {
+	analyzer.mu.RLock()
+	source := analyzer.lastSource
+	analyzer.mu.RUnlock()
+	if source == "" {
+		return analyzer.analyzer.Source()
+	}
+	return source
+}
+
+func (analyzer *dailyLimitedAlertAnalyzer) setSource(source string) {
+	analyzer.mu.Lock()
+	analyzer.lastSource = source
+	analyzer.mu.Unlock()
 }
 
 func NewOpenAIAlertAnalyzer(
@@ -88,14 +170,54 @@ func NewOpenAIAlertAnalyzer(
 	maxAlerts int,
 	thresholds AlertThresholds,
 ) AlertAnalyzer {
+	return newOpenAIAlertAnalyzer(
+		apiKey,
+		model,
+		reasoningEffort,
+		baseURL,
+		maxAlerts,
+		thresholds,
+		nil,
+	)
+}
+
+func NewOpenAIAlertAnalyzerWithOutdoor(
+	apiKey string,
+	model string,
+	reasoningEffort string,
+	baseURL string,
+	maxAlerts int,
+	thresholds AlertThresholds,
+	outdoorContext OutdoorContextSource,
+) AlertAnalyzer {
+	return newOpenAIAlertAnalyzer(
+		apiKey,
+		model,
+		reasoningEffort,
+		baseURL,
+		maxAlerts,
+		thresholds,
+		outdoorContext,
+	)
+}
+
+func newOpenAIAlertAnalyzer(
+	apiKey string,
+	model string,
+	reasoningEffort string,
+	baseURL string,
+	maxAlerts int,
+	thresholds AlertThresholds,
+	outdoorContext OutdoorContextSource,
+) *openAIAlertAnalyzer {
 	trimmedModel := strings.TrimSpace(model)
 	if trimmedModel == "" {
-		trimmedModel = "gpt-5.6-terra"
+		trimmedModel = "gpt-5.6-luna"
 	}
 
 	trimmedReasoningEffort := strings.TrimSpace(reasoningEffort)
 	if trimmedReasoningEffort == "" {
-		trimmedReasoningEffort = "low"
+		trimmedReasoningEffort = "medium"
 	}
 
 	trimmedBaseURL := strings.TrimSpace(baseURL)
@@ -152,6 +274,7 @@ func NewOpenAIAlertAnalyzer(
 		reasoningEffort: trimmedReasoningEffort,
 		maxAlerts:       maxAlerts,
 		thresholds:      normalizedThresholds,
+		outdoorContext:  outdoorContext,
 	}
 }
 
@@ -168,14 +291,32 @@ func (analyzer *openAIAlertAnalyzer) Analyze(
 	}
 
 	summary := buildAlertSummary(readings)
+	var outdoorConditions OutdoorConditions
+	hasOutdoorConditions := false
+	if analyzer.outdoorContext != nil {
+		outdoorConditions, hasOutdoorConditions = analyzer.outdoorContext.Snapshot()
+		if !hasOutdoorConditions {
+			if refresher, ok := analyzer.outdoorContext.(OutdoorContextRefresher); ok {
+				outdoorConditions, hasOutdoorConditions = refresher.EnsureFresh(ctx)
+			}
+		}
+	}
+	analysisPayload := any(summary)
+	if hasOutdoorConditions {
+		analysisPayload = map[string]any{
+			"indoor":  summary,
+			"outdoor": outdoorConditions,
+		}
+	}
 
-	payload, err := json.Marshal(summary)
+	payload, err := json.Marshal(analysisPayload)
 	if err != nil {
 		return nil, fmt.Errorf("marshal summary: %w", err)
 	}
 
 	requestPayload := map[string]any{
-		"model": analyzer.model,
+		"model":             analyzer.model,
+		"max_output_tokens": insightsMaxOutputTokens,
 		"reasoning": map[string]any{
 			"effort": analyzer.reasoningEffort,
 		},
@@ -241,36 +382,13 @@ func (analyzer *openAIAlertAnalyzer) Analyze(
 		return nil, fmt.Errorf("openai status %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
 	}
 
-	var modelResponse struct {
-		OutputText string `json:"output_text"`
-		Output     []struct {
-			Content []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-		} `json:"output"`
-	}
+	var modelResponse responsesAPIResponse
 
 	if err = json.Unmarshal(body, &modelResponse); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	text := strings.TrimSpace(modelResponse.OutputText)
-	if text == "" {
-		for _, output := range modelResponse.Output {
-			for _, content := range output.Content {
-				if content.Type == "output_text" || content.Type == "text" {
-					text = strings.TrimSpace(content.Text)
-					if text != "" {
-						break
-					}
-				}
-			}
-			if text != "" {
-				break
-			}
-		}
-	}
+	text := responseOutputText(modelResponse)
 
 	if text == "" {
 		return nil, fmt.Errorf("openai response did not include text output")
@@ -291,6 +409,14 @@ func (analyzer *openAIAlertAnalyzer) Analyze(
 	}
 
 	alerts := normalizeAlerts(envelope.Alerts, analyzer.maxAlerts, summary, analyzer.thresholds)
+	for index := range alerts {
+		if hasOutdoorConditions && alerts[index].UsesOutdoorContext {
+			alerts[index].Sources = cloneAlertSources(outdoorConditions.Sources)
+		} else {
+			alerts[index].UsesOutdoorContext = false
+			alerts[index].Sources = nil
+		}
+	}
 	if len(alerts) == 0 {
 		fallback := fallbackAlerts(summary, analyzer.maxAlerts, analyzer.thresholds)
 		if len(fallback) > 0 {
@@ -311,6 +437,9 @@ func systemPrompt(maxAlerts int, thresholds AlertThresholds) string {
 			"Otherwise return only the noteworthy topics and omit stable ones. "+
 			"Each non-general alert must focus on one topic only and must not bundle unrelated metrics. "+
 			"When particulate_available is false, do not discuss, infer, or generate alerts from PM values because they are unavailable. "+
+			"When an outdoor object is provided, use it only in an air_quality insight when current outdoor particulate values or air-quality category changes ventilation advice, or in a temperature insight when outdoor temperature changes whether opening windows would move the room toward the 18-26C comfort range. Never use outdoor context for humidity, merely mention the weather, or make a comparison unsupported by available outdoor fields. Never recommend opening windows when outdoor particulate conditions are worse or when outdoor temperature would move the room farther from comfort. "+
+			"If outdoor context does not change the recommended action, ignore it. "+
+			"Never mention or infer a postcode, address, town, coordinates, or station location. Set uses_outdoor_context true only when the insight materially relies on the outdoor object; otherwise set it false. "+
 			"For air_quality discuss PM2.5 and PM10 only, treating PM2.5 at or above %.1f ug/m3, PM10 at or above %.1f ug/m3, or 10 minute moves of %.1f/%.1f ug/m3 as noteworthy. "+
 			"For humidity discuss humidity only, treating values below %.0f%% or above %.0f%% and 10 minute moves of %.1f points as noteworthy. "+
 			"For temperature discuss temperature only, treating values below %.1fC or above %.1fC and 10 minute moves of %.1fC as noteworthy. "+
@@ -355,7 +484,7 @@ func alertSchema(maxAlerts int) map[string]any {
 				"items": map[string]any{
 					"type":                 "object",
 					"additionalProperties": false,
-					"required":             []string{"topic", "kind", "severity", "title", "message"},
+					"required":             []string{"topic", "kind", "severity", "title", "message", "uses_outdoor_context"},
 					"properties": map[string]any{
 						"topic": map[string]any{
 							"type": "string",
@@ -378,6 +507,9 @@ func alertSchema(maxAlerts int) map[string]any {
 							"type":      "string",
 							"minLength": 6,
 							"maxLength": alertMessageMaxLength,
+						},
+						"uses_outdoor_context": map[string]any{
+							"type": "boolean",
 						},
 					},
 				},
@@ -462,11 +594,12 @@ func normalizeAlerts(
 			kind = "alert"
 		}
 		normalized := Alert{
-			Topic:    topic,
-			Kind:     kind,
-			Severity: severity,
-			Title:    trimToLength(normalizeAlertMessageForSeverity(title, severity), 60),
-			Message:  trimToLength(normalizeAlertMessageForSeverity(message, severity), alertMessageMaxLength),
+			Topic:              topic,
+			Kind:               kind,
+			Severity:           severity,
+			Title:              trimToLength(normalizeAlertMessageForSeverity(title, severity), 60),
+			Message:            trimToLength(normalizeAlertMessageForSeverity(message, severity), alertMessageMaxLength),
+			UsesOutdoorContext: alert.UsesOutdoorContext,
 		}
 		if topic == "general" {
 			if generalAlert == nil {

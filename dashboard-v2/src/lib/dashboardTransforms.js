@@ -421,6 +421,7 @@ export function normalizeInsight(rawInsight) {
 
   const normalizedTitle = normalizeInsightTextForSeverity(title, normalizedSeverity);
   const normalizedMessage = normalizeInsightTextForSeverity(message, normalizedSeverity);
+  const sources = normalizeInsightSources(rawInsight.sources);
 
   return {
     id: `${normalizedKind}-${normalizedSeverity}-${normalizedTitle}-${normalizedMessage}`.toLowerCase(),
@@ -428,8 +429,39 @@ export function normalizeInsight(rawInsight) {
     message: normalizedMessage,
     topic,
     severity: normalizedSeverity,
-    kind: normalizedKind
+    kind: normalizedKind,
+    sources
   };
+}
+
+function normalizeInsightSources(rawSources) {
+  if (!Array.isArray(rawSources)) {
+    return [];
+  }
+
+  const sources = [];
+  const seen = new Set();
+  for (const rawSource of rawSources) {
+    const title = typeof rawSource?.title === "string" ? rawSource.title.trim() : "";
+    const rawUrl = typeof rawSource?.url === "string" ? rawSource.url.trim() : "";
+    if (!title || !rawUrl) {
+      continue;
+    }
+    try {
+      const url = new URL(rawUrl);
+      if (url.protocol !== "https:" || seen.has(url.href)) {
+        continue;
+      }
+      seen.add(url.href);
+      sources.push({ title, url: url.href });
+    } catch {
+      continue;
+    }
+    if (sources.length === 3) {
+      break;
+    }
+  }
+  return sources;
 }
 
 function normalizeInsightTopic(rawTopic, title, message) {
