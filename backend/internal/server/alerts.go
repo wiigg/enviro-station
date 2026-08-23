@@ -59,7 +59,7 @@ const (
 	criticalHumidityHighThreshold    = 70.0
 	criticalTemperatureLowThreshold  = 15.0
 	criticalTemperatureHighThreshold = 30.0
-	alertMessageMaxLength            = 320
+	alertMessageMaxLength            = 160
 	secondsPerMinute                 = int64(60)
 	defaultInsightsDailyRequestLimit = 48
 	insightsMaxOutputTokens          = 1200
@@ -479,6 +479,7 @@ func (analyzer *openAIAlertAnalyzer) Analyze(
 			if ventilationDecision != ventilationNotApplicable {
 				alerts[index].Sources = mergeAlertSources(
 					outdoorConditions.TemperatureSources,
+					outdoorConditions.HumiditySources,
 					outdoorConditions.AirQualitySources,
 					outdoorConditions.Sources,
 				)
@@ -493,14 +494,6 @@ func (analyzer *openAIAlertAnalyzer) Analyze(
 			alerts[index].Sources = nil
 		}
 	}
-	alerts = applyOutdoorTemperatureGuidance(
-		alerts,
-		summary,
-		outdoorConditions,
-		hasOutdoorConditions,
-		analyzer.maxAlerts,
-		analyzer.thresholds,
-	)
 	if alertsContainPrivateLocation(alerts) {
 		return nil, errGeneratedAlertPrivacyCheck
 	}
@@ -595,12 +588,12 @@ func enforceOutdoorVentilationSafety(
 		return ventilationNotApplicable
 	}
 	recommendsOutdoorAir := recommendsOpeningWindows(alert.Title + " " + alert.Message)
-	if !recommendsOutdoorAir && !alert.UsesOutdoorContext {
+	if !recommendsOutdoorAir && (!alert.UsesOutdoorContext || alert.Topic == "humidity") {
 		return ventilationNotApplicable
 	}
-	if (alert.Topic == "air_quality" || alert.Topic == "temperature") &&
-		outdoorAirSupportsVentilation(summary, conditions, thresholds) &&
-		outdoorTemperatureSupportsVentilation(summary, conditions, thresholds) {
+	if outdoorAirSupportsVentilation(summary, conditions, thresholds) &&
+		outdoorTemperatureSupportsVentilation(summary, conditions, thresholds) &&
+		outdoorHumiditySupportsVentilation(summary, conditions, thresholds) {
 		alert.UsesOutdoorContext = true
 		return ventilationAllowed
 	}
@@ -612,11 +605,13 @@ func enforceOutdoorVentilationSafety(
 		alert.Message = "Keep windows closed. Reduce indoor particle sources or use filtration while levels settle."
 	case "temperature":
 		alert.Title = "Use indoor temperature controls"
-		alert.Message = "Keep windows closed. Use heating, cooling, or fans while conditions settle."
+		alert.Message = "Keep windows closed; use indoor heating or cooling instead."
+	case "humidity":
+		alert.Title = "Use indoor humidity controls"
+		alert.Message = "Keep windows closed; use indoor humidity control instead."
 	default:
-		alert.UsesOutdoorContext = false
 		alert.Title = "Use indoor controls"
-		alert.Message = "Use indoor controls and keep monitoring; the available data does not support ventilation."
+		alert.Message = "Keep windows closed; use compatible indoor controls instead."
 	}
 	alert.Message = trimToLength(alert.Message, alertMessageMaxLength)
 	return ventilationBlocked
@@ -644,6 +639,7 @@ func applyOutdoorTemperatureGuidance(
 	}
 	sources := mergeAlertSources(
 		conditions.TemperatureSources,
+		conditions.HumiditySources,
 		conditions.AirQualitySources,
 		conditions.Sources,
 	)
@@ -659,27 +655,23 @@ func applyOutdoorTemperatureGuidance(
 		Sources:            sources,
 	}
 	temperatureContext := fmt.Sprintf(
-		"It is %.1fC indoors and %.1fC outside.",
+		"%.1fC inside versus %.1fC outside",
 		indoorTemperature,
 		outdoorTemperature,
 	)
-	if trend := temperatureTrendSummary(summary, thresholds); trend != "" {
-		temperatureContext += " " + trend
-	}
-	outdoorAirSummary := outdoorAirQualitySummary(conditions)
-	if outdoorAirSupportsVentilation(summary, conditions, thresholds) {
+	if outdoorAirSupportsVentilation(summary, conditions, thresholds) &&
+		outdoorTemperatureSupportsVentilation(summary, conditions, thresholds) &&
+		outdoorHumiditySupportsVentilation(summary, conditions, thresholds) {
 		guidance.Title = "Cooler air outside"
 		guidance.Message = fmt.Sprintf(
-			"%s Outdoor air quality is %s and supports opening windows briefly to help cool the room.",
+			"%s; open windows briefly to cool the room.",
 			temperatureContext,
-			outdoorAirSummary,
 		)
 	} else {
 		guidance.Title = "Keep windows closed for now"
 		guidance.Message = fmt.Sprintf(
-			"%s Outdoor air quality is %s and does not support ventilation right now. Keep windows closed and use fans or other indoor cooling.",
+			"%s; keep windows closed and use indoor cooling.",
 			temperatureContext,
-			outdoorAirSummary,
 		)
 	}
 	guidance.Message = trimToLength(guidance.Message, alertMessageMaxLength)
@@ -934,11 +926,13 @@ func outdoorAirSupportsVentilation(
 		*conditions.PM2,
 		summary.Latest.PM2,
 		thresholds.PM2Threshold,
+		thresholds.PM2DeltaTrigger,
 		summary.ParticulateAvailable,
 	) && outdoorParticulateSupportsVentilation(
 		*conditions.PM10,
 		summary.Latest.PM10,
 		thresholds.PM10Threshold,
+		thresholds.PM10DeltaTrigger,
 		summary.ParticulateAvailable,
 	)
 }
@@ -947,12 +941,16 @@ func outdoorParticulateSupportsVentilation(
 	outdoor float64,
 	indoor float64,
 	threshold float64,
+	materialDelta float64,
 	indoorAvailable bool,
 ) bool {
+	if indoorAvailable && outdoor-indoor >= materialDelta {
+		return false
+	}
 	if outdoor < threshold {
 		return true
 	}
-	return indoorAvailable && indoor >= threshold && outdoor < indoor
+	return indoorAvailable && indoor >= threshold && indoor-outdoor >= materialDelta
 }
 
 func normalizedOutdoorAirQualityCategory(category string) string {
@@ -999,27 +997,58 @@ func outdoorTemperatureSupportsVentilation(
 	}
 }
 
+func outdoorHumiditySupportsVentilation(
+	summary alertSummary,
+	conditions OutdoorConditions,
+	thresholds AlertThresholds,
+) bool {
+	if conditions.TemperatureC == nil || conditions.RelativeHumidity == nil {
+		return false
+	}
+	outdoorSaturation := math.Exp((17.625 * *conditions.TemperatureC) / (243.04 + *conditions.TemperatureC))
+	indoorSaturation := math.Exp((17.625 * summary.Latest.Temperature) / (243.04 + summary.Latest.Temperature))
+	if outdoorSaturation <= 0 || indoorSaturation <= 0 {
+		return false
+	}
+	equivalentHumidity := *conditions.RelativeHumidity * outdoorSaturation / indoorSaturation
+	indoorHumidity := summary.Latest.Humidity
+	if indoorHumidity >= thresholds.HumidityLowThreshold && indoorHumidity < thresholds.HumidityHighThreshold {
+		return equivalentHumidity >= thresholds.HumidityLowThreshold &&
+			equivalentHumidity < thresholds.HumidityHighThreshold
+	}
+	return comfortDistance(
+		equivalentHumidity,
+		thresholds.HumidityLowThreshold,
+		thresholds.HumidityHighThreshold,
+	) <= comfortDistance(
+		indoorHumidity,
+		thresholds.HumidityLowThreshold,
+		thresholds.HumidityHighThreshold,
+	)
+}
+
 func systemPrompt(maxAlerts int, thresholds AlertThresholds) string {
 	topics := focusedAlertTopics()
 	return fmt.Sprintf(
-		"You are an indoor air quality analyst. Return between 1 and %d concise actionable insights "+
+		"You are an indoor air quality analyst. Return between 1 and %d short, actionable insights "+
 			"for a home environment. Use focused topics at most once each and prefer this order: %s. "+
 			"If all monitored conditions are stable, return exactly one info insight with topic general. "+
-			"Otherwise return only the noteworthy topics and omit stable ones. "+
-			"Each non-general alert must focus on one topic only and must not bundle unrelated metrics. "+
+			"Otherwise return only noteworthy topics; an outdoor value that materially changes the safest useful action makes its matching topic noteworthy even when the indoor value is comfortable. "+
+			"Each non-general alert must focus on one topic only. Put its recommendation directly in the message; never create a separate recommendation label or list. "+
 			"When particulate_available is false, do not discuss, infer, or generate alerts from PM values because they are unavailable. "+
-			"When an outdoor object is provided, use it only in an air_quality insight when current outdoor particulate values or air-quality category changes ventilation advice, or in a temperature insight when outdoor temperature changes whether bringing outdoor air inside would move the room toward the 18-26C comfort range. Never use outdoor context for humidity, merely mention the weather, or make a comparison unsupported by available outdoor fields. Never recommend opening windows, doors, vents, or otherwise bringing outdoor air inside unless outdoor air quality is good or fair, both PM values are available, and each PM value is below its configured alert threshold or improves on an already-elevated indoor value. Never recommend it when outdoor temperature would move the room farther from comfort. "+
-			"When indoor temperature is near the upper comfort boundary and outdoor air is materially cooler within the comfort range, explicitly advise whether brief window opening is suitable based on outdoor air quality; do not merely call the indoor temperature comfortable. "+
-			"If outdoor context does not change the recommended action, ignore it. "+
+			"Treat the indoor and outdoor readings as one situation before writing any insight. Make one ventilation decision and keep every topic consistent with it. Recommend outdoor air only when air quality is good or fair with complete PM2.5 and PM10 that are not materially worse than indoors, outdoor temperature moves the room toward 18-26C, and outdoor moisture would not move humidity farther from 40-60%% after accounting for the temperature difference. If any check fails, no topic may recommend outdoor air; use compatible indoor controls instead. "+
+			"Metric ownership is strict even when explaining the shared ventilation decision: temperature may mention temperatures only, humidity may mention moisture only, and air_quality may mention particles only. Never mention the name, value, direction, or quality of a different metric in that message. A temperature or humidity message must never mention particles, PM, or air quality; an air_quality or temperature message must never mention humidity, moisture, drier, or wetter. "+
+			"When another metric blocks ventilation, say only that outdoor conditions are unsuitable overall; its matching insight must explain why. Whenever matching outdoor data is available for a returned temperature, humidity, or air_quality insight, include a concise comparison on that same insight even if another metric controls ventilation: compare temperatures, say whether outside air is drier, wetter, or similar, or compare particle levels respectively. Never put outdoor humidity values in a temperature insight. "+
+			"When indoor temperature is within 0.5C of the upper comfort boundary and outdoor air is materially cooler, explicitly say whether opening windows briefly is worthwhile; do not merely call the temperature comfortable. "+
+			"Do not mention outdoor data on a general insight or without the matching outdoor metric. "+
 			"Never mention or infer a postcode, address, town, coordinates, or station location. Set uses_outdoor_context true only when the insight materially relies on the outdoor object; otherwise set it false. "+
 			"For air_quality discuss PM2.5 and PM10 only, treating PM2.5 at or above %.1f ug/m3, PM10 at or above %.1f ug/m3, or 10 minute moves of %.1f/%.1f ug/m3 as noteworthy. "+
 			"For humidity discuss humidity only, treating values below %.0f%% or above %.0f%% and 10 minute moves of %.1f points as noteworthy. "+
 			"For temperature discuss temperature only, treating values below %.1fC or above %.1fC and 10 minute moves of %.1fC as noteworthy. "+
 			"Treat both worsening and improvement as noteworthy when the change is material. "+
-			"Use critical only for PM2.5 above %.1f ug/m3, PM10 above %.1f ug/m3, humidity below %.0f%% or at/above %.0f%%, or temperature at/below %.1fC or at/above %.1fC; otherwise use warn for noteworthy non-critical conditions. "+
-			"Use info only for neutral observations or material improvements. "+
+			"Set severity from the latest indoor value only; outdoor context must never raise severity. Use critical only for PM2.5 above %.1f ug/m3, PM10 above %.1f ug/m3, humidity below %.0f%% or at/above %.0f%%, or temperature at/below %.1fC or at/above %.1fC. Use warn only when the latest indoor value is outside its normal threshold but not critical. When the latest indoor value is within its normal threshold, always use info and kind insight even if an outdoor comparison or indoor trend is noteworthy. Use kind alert only with warn or critical. "+
 			"Do not use severity labels such as critical, warn, watch, or action in titles or messages; the UI displays severity separately. "+
-			"Keep title under 60 characters and message under 320 characters. End every message with a complete sentence.",
+			"Keep title under 40 characters. Keep message to one complete sentence under 160 characters.",
 		maxAlerts,
 		strings.Join(topics, ", "),
 		thresholds.PM2Threshold,

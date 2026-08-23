@@ -13,8 +13,8 @@ Enviro Station is an air quality monitoring platform with three services:
 3. Dashboard uses the live stream for realtime updates and device-scoped Postgres buckets for longer-range history.
 4. If Postgres is down, the backend can still boot in live-only mode and retry durable storage later.
 5. Particle readings carry `pm_available`; failed PMS5003 reads are stored as unavailable and excluded from charts and insights.
-6. Optional backend-only outdoor context uses postcode-derived coordinates with Open-Meteo temperature and modelled CAMS European air quality to improve ventilation advice without exposing the configured location to the browser.
-7. Window-opening advice is emitted only when both outdoor particulate levels and temperature make ventilation appropriate.
+6. Optional backend-only outdoor context uses postcode-derived coordinates with Open-Meteo temperature, humidity, and modelled CAMS European air quality without exposing the configured location to the browser.
+7. Insights make one shared ventilation decision from outdoor temperature, moisture, and particulate conditions, then keep each metric's explanation on its own card.
 
 ## Repository Layout
 

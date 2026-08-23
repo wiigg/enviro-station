@@ -36,6 +36,9 @@ func TestOutdoorProviderFetchesDeterministicCurrentConditions(t *testing.T) {
 	if conditions.TemperatureC == nil || *conditions.TemperatureC != 27.9 {
 		t.Fatalf("expected 27.9°C temperature, got %v", conditions.TemperatureC)
 	}
+	if conditions.RelativeHumidity == nil || *conditions.RelativeHumidity != 68 {
+		t.Fatalf("expected 68%% relative humidity, got %v", conditions.RelativeHumidity)
+	}
 	if conditions.PM2 == nil || *conditions.PM2 != 6.8 {
 		t.Fatalf("expected PM2.5 6.8, got %v", conditions.PM2)
 	}
@@ -48,6 +51,9 @@ func TestOutdoorProviderFetchesDeterministicCurrentConditions(t *testing.T) {
 	if conditions.TemperatureObservedAt == nil || *conditions.TemperatureObservedAt != "2026-07-12T12:30:00Z" {
 		t.Fatalf("expected current temperature timestamp, got %v", conditions.TemperatureObservedAt)
 	}
+	if conditions.HumidityObservedAt == nil || *conditions.HumidityObservedAt != "2026-07-12T12:30:00Z" {
+		t.Fatalf("expected current humidity timestamp, got %v", conditions.HumidityObservedAt)
+	}
 	if conditions.AirQualityObservedAt == nil || *conditions.AirQualityObservedAt != "2026-07-12T12:30:00Z" {
 		t.Fatalf("expected current air-quality timestamp, got %v", conditions.AirQualityObservedAt)
 	}
@@ -58,6 +64,9 @@ func TestOutdoorProviderFetchesDeterministicCurrentConditions(t *testing.T) {
 		if !containsSourceTitle(conditions.Sources, title) {
 			t.Fatalf("expected %s attribution, got %#v", title, conditions.Sources)
 		}
+	}
+	if len(conditions.HumiditySources) != 1 || conditions.HumiditySources[0].Title != "Open-Meteo" {
+		t.Fatalf("expected Open-Meteo humidity attribution, got %#v", conditions.HumiditySources)
 	}
 	if postcodeRequests.Load() != 1 || weatherRequests.Load() != 1 || airQualityRequests.Load() != 1 {
 		t.Fatalf(
@@ -163,6 +172,27 @@ func TestOutdoorProviderSignalsRecoveryFromStaleCacheWithSameValues(t *testing.T
 	}
 }
 
+func TestOutdoorProviderSignalsEverySuccessfulRegularRefresh(t *testing.T) {
+	server := newOutdoorTestServer(t, outdoorTestServerOptions{})
+	defer server.Close()
+
+	provider := newTestOutdoorProvider(server.URL)
+	if _, ok := provider.EnsureFresh(context.Background()); !ok {
+		t.Fatal("expected initial outdoor context")
+	}
+
+	updates := 0
+	provider.refresh(context.Background(), func(initial bool) {
+		if initial {
+			t.Error("expected a regular outdoor update")
+		}
+		updates++
+	})
+	if updates != 1 {
+		t.Fatalf("expected every successful refresh to trigger insight re-evaluation, got %d", updates)
+	}
+}
+
 func TestOutdoorProviderStartCoalescesInitialAndOnDemandRefresh(t *testing.T) {
 	var weatherRequests atomic.Int32
 	var airQualityRequests atomic.Int32
@@ -216,7 +246,7 @@ func TestOutdoorProviderRetriesFailedInitialRefreshAndSignalsReadiness(t *testin
 			}
 			_, _ = fmt.Fprintf(
 				response,
-				`{"current":{"time":%d,"temperature_2m":27.9}}`,
+				`{"current":{"time":%d,"temperature_2m":27.9,"relative_humidity_2m":68}}`,
 				outdoorTestNow.Truncate(15*time.Minute).Unix(),
 			)
 		case "/v1/air-quality":
@@ -270,7 +300,7 @@ func TestOutdoorProviderRetriesMissingInitialComponent(t *testing.T) {
 			weatherRequests.Add(1)
 			_, _ = fmt.Fprintf(
 				response,
-				`{"current":{"time":%d,"temperature_2m":27.9}}`,
+				`{"current":{"time":%d,"temperature_2m":27.9,"relative_humidity_2m":68}}`,
 				outdoorTestNow.Truncate(15*time.Minute).Unix(),
 			)
 		case "/v1/air-quality":
@@ -319,23 +349,45 @@ func TestOutdoorProviderRetriesMissingInitialComponent(t *testing.T) {
 	}
 }
 
-func TestOutdoorProviderKeepsTemperatureWhenAirQualityFails(t *testing.T) {
+func TestOutdoorProviderKeepsWeatherWhenAirQualityFails(t *testing.T) {
 	server := newOutdoorTestServer(t, outdoorTestServerOptions{airQualityStatus: http.StatusBadGateway})
 	defer server.Close()
 
 	provider := newTestOutdoorProvider(server.URL)
 	conditions, err := provider.fetch(context.Background())
 	if err != nil {
-		t.Fatalf("expected temperature-only context to remain useful: %v", err)
+		t.Fatalf("expected weather-only context to remain useful: %v", err)
 	}
-	if conditions.TemperatureC == nil || conditions.PM2 != nil || conditions.PM10 != nil {
-		t.Fatalf("expected only temperature, got %#v", conditions)
+	if conditions.TemperatureC == nil || conditions.RelativeHumidity == nil ||
+		conditions.PM2 != nil || conditions.PM10 != nil {
+		t.Fatalf("expected only weather values, got %#v", conditions)
 	}
 	if conditions.AirQualityCategory != "unknown" {
 		t.Fatalf("expected unknown air quality, got %q", conditions.AirQualityCategory)
 	}
 	if len(conditions.Sources) != 1 || conditions.Sources[0].Title != "Open-Meteo" {
 		t.Fatalf("expected only Open-Meteo attribution, got %#v", conditions.Sources)
+	}
+}
+
+func TestOutdoorProviderKeepsOtherMetricsWhenHumidityIsUnavailable(t *testing.T) {
+	server := newOutdoorTestServer(t, outdoorTestServerOptions{omitWeatherHumidity: true})
+	defer server.Close()
+
+	provider := newTestOutdoorProvider(server.URL)
+	conditions, err := provider.fetch(context.Background())
+	if err != nil {
+		t.Fatalf("expected partial weather context to remain useful: %v", err)
+	}
+	if conditions.TemperatureC == nil || conditions.PM2 == nil || conditions.PM10 == nil {
+		t.Fatalf("expected temperature and air-quality values, got %#v", conditions)
+	}
+	if conditions.RelativeHumidity != nil || conditions.HumidityObservedAt != nil ||
+		len(conditions.HumiditySources) != 0 {
+		t.Fatalf("expected unavailable humidity to remain absent, got %#v", conditions)
+	}
+	if hasCompleteOutdoorData(conditions) {
+		t.Fatal("expected missing humidity to mark outdoor context incomplete for retry")
 	}
 }
 
@@ -348,7 +400,8 @@ func TestOutdoorProviderKeepsAirQualityWhenWeatherFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected air-quality-only context to remain useful: %v", err)
 	}
-	if conditions.TemperatureC != nil || conditions.PM2 == nil || conditions.PM10 == nil {
+	if conditions.TemperatureC != nil || conditions.RelativeHumidity != nil ||
+		conditions.PM2 == nil || conditions.PM10 == nil {
 		t.Fatalf("expected only air-quality values, got %#v", conditions)
 	}
 	if conditions.AirQualityCategory != "fair" || conditions.AirQualityObservedAt == nil {
@@ -514,12 +567,17 @@ func TestOutdoorSourcesMatchInsightTopic(t *testing.T) {
 	conditions := OutdoorConditions{
 		Sources:            []AlertSource{openMeteo, cams},
 		TemperatureSources: []AlertSource{openMeteo},
+		HumiditySources:    []AlertSource{openMeteo},
 		AirQualitySources:  []AlertSource{openMeteo, cams},
 	}
 
 	temperatureSources := outdoorSourcesForTopic(conditions, "temperature")
 	if len(temperatureSources) != 1 || temperatureSources[0].Title != "Open-Meteo" {
 		t.Fatalf("expected weather attribution only, got %#v", temperatureSources)
+	}
+	humiditySources := outdoorSourcesForTopic(conditions, "humidity")
+	if len(humiditySources) != 1 || humiditySources[0].Title != "Open-Meteo" {
+		t.Fatalf("expected humidity attribution only, got %#v", humiditySources)
 	}
 	airQualitySources := outdoorSourcesForTopic(conditions, "air_quality")
 	if len(airQualitySources) != 2 || !containsSourceTitle(airQualitySources, "CAMS ENSEMBLE") {
@@ -570,31 +628,52 @@ func TestOutdoorConditionsMaterialChangeThresholds(t *testing.T) {
 	previousTemperature := 12.0
 	minorTemperatureChange := 13.9
 	materialTemperatureChange := 14.0
+	previousHumidity := 45.0
+	minorHumidityChange := 52.9
+	materialHumidityChange := 53.0
 	base := OutdoorConditions{
 		TemperatureC:       &previousTemperature,
+		RelativeHumidity:   &previousHumidity,
 		AirQualityCategory: "good",
 	}
 
 	if outdoorConditionsMateriallyChanged(base, OutdoorConditions{
 		TemperatureC:       &minorTemperatureChange,
+		RelativeHumidity:   &previousHumidity,
 		AirQualityCategory: "good",
 	}) {
 		t.Fatal("expected minor temperature change not to trigger insights")
 	}
 	if !outdoorConditionsMateriallyChanged(base, OutdoorConditions{
 		TemperatureC:       &materialTemperatureChange,
+		RelativeHumidity:   &previousHumidity,
 		AirQualityCategory: "good",
 	}) {
 		t.Fatal("expected two-degree temperature change to trigger insights")
 	}
+	if outdoorConditionsMateriallyChanged(base, OutdoorConditions{
+		TemperatureC:       &previousTemperature,
+		RelativeHumidity:   &minorHumidityChange,
+		AirQualityCategory: "good",
+	}) {
+		t.Fatal("expected minor humidity change not to trigger insights")
+	}
+	if !outdoorConditionsMateriallyChanged(base, OutdoorConditions{
+		TemperatureC:       &previousTemperature,
+		RelativeHumidity:   &materialHumidityChange,
+		AirQualityCategory: "good",
+	}) {
+		t.Fatal("expected eight-point humidity change to trigger insights")
+	}
 }
 
 type outdoorTestServerOptions struct {
-	onPostcode       func()
-	onWeather        func()
-	onAir            func()
-	weatherStatus    int
-	airQualityStatus int
+	onPostcode          func()
+	onWeather           func()
+	onAir               func()
+	weatherStatus       int
+	airQualityStatus    int
+	omitWeatherHumidity bool
 }
 
 func newOutdoorTestServer(t *testing.T, options outdoorTestServerOptions) *httptest.Server {
@@ -612,7 +691,7 @@ func newOutdoorTestServer(t *testing.T, options outdoorTestServerOptions) *httpt
 				options.onWeather()
 			}
 			assertOutdoorLocationQuery(t, request)
-			if request.URL.Query().Get("current") != "temperature_2m" ||
+			if request.URL.Query().Get("current") != "temperature_2m,relative_humidity_2m" ||
 				request.URL.Query().Get("timeformat") != "unixtime" {
 				t.Error("unexpected weather query")
 			}
@@ -620,10 +699,15 @@ func newOutdoorTestServer(t *testing.T, options outdoorTestServerOptions) *httpt
 				response.WriteHeader(options.weatherStatus)
 				return
 			}
+			humidityField := `,"relative_humidity_2m":68`
+			if options.omitWeatherHumidity {
+				humidityField = ""
+			}
 			_, _ = fmt.Fprintf(
 				response,
-				`{"current":{"time":%d,"temperature_2m":27.9}}`,
+				`{"current":{"time":%d,"temperature_2m":27.9%s}}`,
 				outdoorTestNow.Truncate(15*time.Minute).Unix(),
+				humidityField,
 			)
 		case "/v1/air-quality":
 			if options.onAir != nil {

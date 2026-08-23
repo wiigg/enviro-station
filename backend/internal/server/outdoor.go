@@ -31,15 +31,18 @@ const (
 
 type OutdoorConditions struct {
 	TemperatureC          *float64      `json:"temperature_c"`
+	RelativeHumidity      *float64      `json:"relative_humidity"`
 	PM2                   *float64      `json:"pm2"`
 	PM10                  *float64      `json:"pm10"`
 	AirQualityCategory    string        `json:"air_quality_category"`
 	TemperatureObservedAt *string       `json:"temperature_observed_at"`
+	HumidityObservedAt    *string       `json:"humidity_observed_at"`
 	AirQualityObservedAt  *string       `json:"air_quality_observed_at"`
 	DataQuality           string        `json:"data_quality"`
 	FetchedAt             int64         `json:"fetched_at"`
 	Sources               []AlertSource `json:"-"`
 	TemperatureSources    []AlertSource `json:"-"`
+	HumiditySources       []AlertSource `json:"-"`
 	AirQualitySources     []AlertSource `json:"-"`
 }
 
@@ -205,8 +208,9 @@ func (provider *OpenMeteoOutdoorProvider) refreshInitial(
 		return false, false
 	}
 	log.Printf(
-		"outdoor context initial refresh completed temperature_available=%t pm_available=%t quality=%s provider=open-meteo",
+		"outdoor context initial refresh completed temperature_available=%t humidity_available=%t pm_available=%t quality=%s provider=open-meteo",
 		conditions.TemperatureC != nil,
+		conditions.RelativeHumidity != nil,
 		conditions.PM2 != nil || conditions.PM10 != nil,
 		conditions.AirQualityCategory,
 	)
@@ -227,6 +231,7 @@ func (provider *OpenMeteoOutdoorProvider) Snapshot() (OutdoorConditions, bool) {
 	}
 	conditions.Sources = cloneAlertSources(conditions.Sources)
 	conditions.TemperatureSources = cloneAlertSources(conditions.TemperatureSources)
+	conditions.HumiditySources = cloneAlertSources(conditions.HumiditySources)
 	conditions.AirQualitySources = cloneAlertSources(conditions.AirQualitySources)
 	return conditions, true
 }
@@ -243,13 +248,14 @@ func (provider *OpenMeteoOutdoorProvider) refresh(
 	}
 
 	log.Printf(
-		"outdoor context refreshed temperature_available=%t pm_available=%t quality=%s material_change=%t provider=open-meteo",
+		"outdoor context refreshed temperature_available=%t humidity_available=%t pm_available=%t quality=%s material_change=%t provider=open-meteo",
 		conditions.TemperatureC != nil,
+		conditions.RelativeHumidity != nil,
 		conditions.PM2 != nil || conditions.PM10 != nil,
 		conditions.AirQualityCategory,
 		changed,
 	)
-	if changed && onUpdate != nil {
+	if onUpdate != nil {
 		onUpdate(false)
 	}
 	return hasCompleteOutdoorData(conditions)
@@ -316,10 +322,11 @@ func (provider *OpenMeteoOutdoorProvider) fetch(ctx context.Context) (OutdoorCon
 		return OutdoorConditions{}, err
 	}
 
-	type temperatureResult struct {
-		value      float64
-		observedAt string
-		err        error
+	type weatherResult struct {
+		temperature      *float64
+		relativeHumidity *float64
+		observedAt       string
+		err              error
 	}
 	type airQualityResult struct {
 		pm2        *float64
@@ -328,11 +335,18 @@ func (provider *OpenMeteoOutdoorProvider) fetch(ctx context.Context) (OutdoorCon
 		observedAt string
 		err        error
 	}
-	temperatureResults := make(chan temperatureResult, 1)
+	weatherResults := make(chan weatherResult, 1)
 	airQualityResults := make(chan airQualityResult, 1)
 	go func() {
-		value, observedAt, fetchErr := provider.fetchCurrentTemperature(ctx, now, latitude, longitude)
-		temperatureResults <- temperatureResult{value: value, observedAt: observedAt, err: fetchErr}
+		temperature, relativeHumidity, observedAt, fetchErr := provider.fetchCurrentWeather(
+			ctx,
+			now,
+			latitude,
+			longitude,
+		)
+		weatherResults <- weatherResult{
+			temperature: temperature, relativeHumidity: relativeHumidity, observedAt: observedAt, err: fetchErr,
+		}
 	}()
 	go func() {
 		pm2, pm10, category, observedAt, fetchErr := provider.fetchCurrentAirQuality(ctx, now, latitude, longitude)
@@ -341,22 +355,30 @@ func (provider *OpenMeteoOutdoorProvider) fetch(ctx context.Context) (OutdoorCon
 		}
 	}()
 
-	temperature := <-temperatureResults
+	weather := <-weatherResults
 	airQuality := <-airQualityResults
 	conditions := OutdoorConditions{
 		AirQualityCategory: "unknown",
 		DataQuality:        "forecast",
 		FetchedAt:          now.UnixMilli(),
 	}
-	if temperature.err != nil {
-		log.Printf("current outdoor temperature unavailable: %v", temperature.err)
+	if weather.err != nil {
+		log.Printf("current outdoor weather unavailable: %v", weather.err)
 	} else {
-		conditions.TemperatureC = &temperature.value
-		conditions.TemperatureObservedAt = &temperature.observedAt
-		conditions.TemperatureSources = []AlertSource{{
+		weatherSource := AlertSource{
 			Title: "Open-Meteo",
 			URL:   "https://open-meteo.com/en/docs",
-		}}
+		}
+		if weather.temperature != nil {
+			conditions.TemperatureC = weather.temperature
+			conditions.TemperatureObservedAt = &weather.observedAt
+			conditions.TemperatureSources = []AlertSource{weatherSource}
+		}
+		if weather.relativeHumidity != nil {
+			conditions.RelativeHumidity = weather.relativeHumidity
+			conditions.HumidityObservedAt = &weather.observedAt
+			conditions.HumiditySources = []AlertSource{weatherSource}
+		}
 	}
 	if airQuality.err != nil {
 		log.Printf("current outdoor air quality unavailable: %v", airQuality.err)
@@ -374,53 +396,56 @@ func (provider *OpenMeteoOutdoorProvider) fetch(ctx context.Context) (OutdoorCon
 	if !hasUsefulOutdoorData(conditions) {
 		return OutdoorConditions{}, fmt.Errorf(
 			"outdoor data unavailable: weather=%v; air_quality=%v",
-			temperature.err,
+			weather.err,
 			airQuality.err,
 		)
 	}
 
 	conditions.Sources = mergeAlertSources(
 		conditions.TemperatureSources,
+		conditions.HumiditySources,
 		conditions.AirQualitySources,
 	)
 	return conditions, nil
 }
 
-func (provider *OpenMeteoOutdoorProvider) fetchCurrentTemperature(
+func (provider *OpenMeteoOutdoorProvider) fetchCurrentWeather(
 	ctx context.Context,
 	now time.Time,
 	latitude float64,
 	longitude float64,
-) (float64, string, error) {
+) (*float64, *float64, string, error) {
 	endpoint, err := url.Parse(provider.weatherBaseURL + "/v1/forecast")
 	if err != nil {
-		return 0, "", fmt.Errorf("build weather URL: %w", err)
+		return nil, nil, "", fmt.Errorf("build weather URL: %w", err)
 	}
 	query := endpoint.Query()
 	query.Set("latitude", strconv.FormatFloat(latitude, 'f', outdoorCoordinatePrecision, 64))
 	query.Set("longitude", strconv.FormatFloat(longitude, 'f', outdoorCoordinatePrecision, 64))
-	query.Set("current", "temperature_2m")
+	query.Set("current", "temperature_2m,relative_humidity_2m")
 	query.Set("timeformat", "unixtime")
 	endpoint.RawQuery = query.Encode()
 
 	var payload struct {
 		Current struct {
-			Time         int64    `json:"time"`
-			TemperatureC *float64 `json:"temperature_2m"`
+			Time             int64    `json:"time"`
+			TemperatureC     *float64 `json:"temperature_2m"`
+			RelativeHumidity *float64 `json:"relative_humidity_2m"`
 		} `json:"current"`
 	}
 	if err = provider.getJSON(ctx, endpoint.String(), &payload); err != nil {
-		return 0, "", fmt.Errorf("fetch current weather: %w", err)
+		return nil, nil, "", fmt.Errorf("fetch current weather: %w", err)
 	}
 	temperature := boundedOutdoorMetric(payload.Current.TemperatureC, -60, 60)
-	if temperature == nil {
-		return 0, "", fmt.Errorf("current weather temperature was invalid")
+	relativeHumidity := boundedOutdoorMetric(payload.Current.RelativeHumidity, 0, 100)
+	if temperature == nil && relativeHumidity == nil {
+		return nil, nil, "", fmt.Errorf("current weather values were invalid")
 	}
 	observedAt := normalizeOutdoorUnixTimestamp(payload.Current.Time, now)
 	if observedAt == nil {
-		return 0, "", fmt.Errorf("current weather timestamp was stale")
+		return nil, nil, "", fmt.Errorf("current weather timestamp was stale")
 	}
-	return *temperature, *observedAt, nil
+	return temperature, relativeHumidity, *observedAt, nil
 }
 
 func (provider *OpenMeteoOutdoorProvider) fetchCurrentAirQuality(
@@ -561,13 +586,16 @@ func outdoorSourcesForTopic(conditions OutdoorConditions, topic string) []AlertS
 	switch topic {
 	case "temperature":
 		sources = conditions.TemperatureSources
+	case "humidity":
+		sources = conditions.HumiditySources
 	case "air_quality":
 		sources = conditions.AirQualitySources
 	}
 	if len(sources) > 0 {
 		return cloneAlertSources(sources)
 	}
-	if len(conditions.TemperatureSources) > 0 || len(conditions.AirQualitySources) > 0 {
+	if len(conditions.TemperatureSources) > 0 || len(conditions.HumiditySources) > 0 ||
+		len(conditions.AirQualitySources) > 0 {
 		return nil
 	}
 	return cloneAlertSources(conditions.Sources)
@@ -618,12 +646,14 @@ func baseURLOrDefault(value, fallback string) string {
 }
 
 func hasUsefulOutdoorData(conditions OutdoorConditions) bool {
-	return conditions.TemperatureC != nil || conditions.PM2 != nil || conditions.PM10 != nil ||
+	return conditions.TemperatureC != nil || conditions.RelativeHumidity != nil ||
+		conditions.PM2 != nil || conditions.PM10 != nil ||
 		conditions.AirQualityCategory != "unknown"
 }
 
 func hasCompleteOutdoorData(conditions OutdoorConditions) bool {
-	return conditions.TemperatureC != nil && conditions.PM2 != nil && conditions.PM10 != nil
+	return conditions.TemperatureC != nil && conditions.RelativeHumidity != nil &&
+		conditions.PM2 != nil && conditions.PM10 != nil
 }
 
 func outdoorCategoryFromEuropeanAQI(value *float64) string {
@@ -649,6 +679,7 @@ func outdoorCategoryFromEuropeanAQI(value *float64) string {
 
 func outdoorConditionsMateriallyChanged(previous, current OutdoorConditions) bool {
 	return nullableMetricChanged(previous.TemperatureC, current.TemperatureC, 2) ||
+		nullableMetricChanged(previous.RelativeHumidity, current.RelativeHumidity, 8) ||
 		nullableMetricChanged(previous.PM2, current.PM2, 5) ||
 		nullableMetricChanged(previous.PM10, current.PM10, 15) ||
 		previous.AirQualityCategory != current.AirQualityCategory

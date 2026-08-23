@@ -54,16 +54,16 @@ check_paths() {
   local kind
 
   : >"$match_file"
-  git ls-files >"$match_file"
+  git ls-files --cached --others --exclude-standard >"$match_file"
 
   if stream_contains_location <"$match_file"; then
-    printf '%s\n' "privacy check failed: prohibited location content found in a tracked path" >&2
+    printf '%s\n' "privacy check failed: prohibited location content found in a working-tree path" >&2
     return 1
   fi
 
   while IFS= read -r path; do
     if kind="$(forbidden_path_kind "$path")"; then
-      printf 'privacy check failed: tracked %s found in the working tree\n' "$kind" >&2
+      printf 'privacy check failed: %s found in the working tree\n' "$kind" >&2
       return 1
     fi
   done <"$match_file"
@@ -106,6 +106,15 @@ check_content() {
       return 1
     fi
   done <"$match_file"
+
+  if [[ -z "$revision" ]]; then
+    while IFS= read -r -d '' path; do
+      if ! is_generated_file "$path" && stream_contains_location <"$path"; then
+        printf 'privacy check failed: prohibited location content found in %s\n' "$label" >&2
+        return 1
+      fi
+    done < <(git ls-files --others --exclude-standard -z)
+  fi
 }
 
 check_commit_message() {

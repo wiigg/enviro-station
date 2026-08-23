@@ -84,12 +84,17 @@ func TestDailyLimitedAnalyzerUsesDeterministicInsightsAfterLimit(t *testing.T) {
 func TestSystemPromptDefinesWhenOutdoorContextIsUseful(t *testing.T) {
 	prompt := systemPrompt(3, defaultAlertThresholds())
 	for _, expected := range []string{
-		"only in an air_quality insight",
-		"or in a temperature insight",
-		"Never use outdoor context for humidity",
-		"Never recommend opening windows, doors, vents, or otherwise bringing outdoor air inside",
-		"outdoor temperature would move the room farther from comfort",
-		"If outdoor context does not change the recommended action, ignore it",
+		"Make one ventilation decision and keep every topic consistent",
+		"Metric ownership is strict even when explaining the shared ventilation decision",
+		"A temperature or humidity message must never mention particles, PM, or air quality",
+		"When another metric blocks ventilation, say only that outdoor conditions are unsuitable overall",
+		"Whenever matching outdoor data is available for a returned temperature, humidity, or air_quality insight",
+		"even if another metric controls ventilation",
+		"Never put outdoor humidity values in a temperature insight",
+		"message to one complete sentence under 160 characters",
+		"Do not mention outdoor data on a general insight or without the matching outdoor metric",
+		"Set severity from the latest indoor value only; outdoor context must never raise severity",
+		"always use info and kind insight even if an outdoor comparison or indoor trend is noteworthy",
 	} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("expected outdoor-context instruction %q", expected)
@@ -141,6 +146,7 @@ func TestOutdoorParticulateSupportsVentilation(t *testing.T) {
 		outdoor         float64
 		indoor          float64
 		threshold       float64
+		materialDelta   float64
 		indoorAvailable bool
 		want            bool
 	}{
@@ -149,6 +155,7 @@ func TestOutdoorParticulateSupportsVentilation(t *testing.T) {
 			outdoor:         7,
 			indoor:          3,
 			threshold:       8,
+			materialDelta:   5,
 			indoorAvailable: true,
 			want:            true,
 		},
@@ -157,14 +164,16 @@ func TestOutdoorParticulateSupportsVentilation(t *testing.T) {
 			outdoor:         8,
 			indoor:          3,
 			threshold:       8,
+			materialDelta:   5,
 			indoorAvailable: true,
 			want:            false,
 		},
 		{
 			name:            "elevated indoor air and lower outdoor air",
-			outdoor:         9,
+			outdoor:         3,
 			indoor:          10,
 			threshold:       8,
+			materialDelta:   5,
 			indoorAvailable: true,
 			want:            true,
 		},
@@ -173,6 +182,7 @@ func TestOutdoorParticulateSupportsVentilation(t *testing.T) {
 			outdoor:         10,
 			indoor:          10,
 			threshold:       8,
+			materialDelta:   5,
 			indoorAvailable: true,
 			want:            false,
 		},
@@ -181,6 +191,7 @@ func TestOutdoorParticulateSupportsVentilation(t *testing.T) {
 			outdoor:         7,
 			indoor:          0,
 			threshold:       8,
+			materialDelta:   5,
 			indoorAvailable: false,
 			want:            true,
 		},
@@ -189,6 +200,7 @@ func TestOutdoorParticulateSupportsVentilation(t *testing.T) {
 			outdoor:         8,
 			indoor:          0,
 			threshold:       8,
+			materialDelta:   5,
 			indoorAvailable: false,
 			want:            false,
 		},
@@ -200,6 +212,7 @@ func TestOutdoorParticulateSupportsVentilation(t *testing.T) {
 				test.outdoor,
 				test.indoor,
 				test.threshold,
+				test.materialDelta,
 				test.indoorAvailable,
 			)
 			if got != test.want {
@@ -211,6 +224,7 @@ func TestOutdoorParticulateSupportsVentilation(t *testing.T) {
 
 func TestApplyOutdoorTemperatureGuidancePreservesHigherPriorityAlertAtLimit(t *testing.T) {
 	outdoorTemperature := 23.0
+	outdoorHumidity := 55.0
 	outdoorPM2 := 5.0
 	outdoorPM10 := 10.0
 	temperatureSources, airQualitySources := outdoorGuidanceTestSources()
@@ -236,10 +250,12 @@ func TestApplyOutdoorTemperatureGuidancePreservesHigherPriorityAlertAtLimit(t *t
 		summary,
 		OutdoorConditions{
 			TemperatureC:       &outdoorTemperature,
+			RelativeHumidity:   &outdoorHumidity,
 			PM2:                &outdoorPM2,
 			PM10:               &outdoorPM10,
 			AirQualityCategory: "good",
 			TemperatureSources: temperatureSources,
+			HumiditySources:    temperatureSources,
 			AirQualitySources:  airQualitySources,
 		},
 		true,
@@ -261,6 +277,7 @@ func TestApplyOutdoorTemperatureGuidancePreservesHigherPriorityAlertAtLimit(t *t
 
 func TestApplyOutdoorTemperatureGuidancePreservesExistingTemperatureWarning(t *testing.T) {
 	outdoorTemperature := 23.0
+	outdoorHumidity := 55.0
 	outdoorPM2 := 5.0
 	outdoorPM10 := 10.0
 	temperatureSources, airQualitySources := outdoorGuidanceTestSources()
@@ -287,10 +304,12 @@ func TestApplyOutdoorTemperatureGuidancePreservesExistingTemperatureWarning(t *t
 		summary,
 		OutdoorConditions{
 			TemperatureC:       &outdoorTemperature,
+			RelativeHumidity:   &outdoorHumidity,
 			PM2:                &outdoorPM2,
 			PM10:               &outdoorPM10,
 			AirQualityCategory: "good",
 			TemperatureSources: temperatureSources,
+			HumiditySources:    temperatureSources,
 			AirQualitySources:  airQualitySources,
 		},
 		true,
@@ -309,8 +328,9 @@ func TestApplyOutdoorTemperatureGuidancePreservesExistingTemperatureWarning(t *t
 	}
 }
 
-func TestOpenAIAlertAnalyzerReplacesComfortInsightWithOutdoorCoolingGuidance(t *testing.T) {
+func TestOpenAIAlertAnalyzerPreservesModelInsightWithoutTemperatureOverride(t *testing.T) {
 	outdoorTemperature := 23.0
+	outdoorHumidity := 55.0
 	// Outdoor air can be slightly more polluted than pristine indoor air while
 	// remaining safely below both configured alert thresholds.
 	outdoorPM2 := 5.0
@@ -318,10 +338,12 @@ func TestOpenAIAlertAnalyzerReplacesComfortInsightWithOutdoorCoolingGuidance(t *
 	temperatureSources, airQualitySources := outdoorGuidanceTestSources()
 	analyzer := newOutdoorTemperatureGuidanceTestAnalyzer(t, OutdoorConditions{
 		TemperatureC:       &outdoorTemperature,
+		RelativeHumidity:   &outdoorHumidity,
 		PM2:                &outdoorPM2,
 		PM10:               &outdoorPM10,
 		AirQualityCategory: "fair",
 		TemperatureSources: temperatureSources,
+		HumiditySources:    temperatureSources,
 		AirQualitySources:  airQualitySources,
 	})
 
@@ -336,27 +358,111 @@ func TestOpenAIAlertAnalyzerReplacesComfortInsightWithOutdoorCoolingGuidance(t *
 		t.Fatalf("analyze: %v", err)
 	}
 	if len(alerts) != 1 {
-		t.Fatalf("expected one actionable insight, got %#v", alerts)
+		t.Fatalf("expected one model insight, got %#v", alerts)
 	}
 	alert := alerts[0]
-	if alert.Topic != "temperature" || !recommendsOpeningWindows(alert.Title+" "+alert.Message) {
-		t.Fatalf("expected explicit outdoor cooling guidance, got %#v", alert)
+	if alert.Topic != "general" || alert.Title != "Home conditions comfortable" ||
+		alert.Message != "Temperature is at a comfortable level." {
+		t.Fatalf("expected the short model copy to remain unchanged, got %#v", alert)
 	}
-	for _, expected := range []string{"25.8C indoors", "23.0C outside", "PM2.5 5.0", "PM10 10.0"} {
-		if !strings.Contains(alert.Message, expected) {
-			t.Fatalf("expected guidance to include %q, got %q", expected, alert.Message)
+	if alert.UsesOutdoorContext || len(alert.Sources) != 0 {
+		t.Fatalf("expected unused outdoor context to remain unattributed, got %#v", alert)
+	}
+}
+
+func TestOpenAIAlertAnalyzerKeepsAdviceInlineAndAttributesHumidity(t *testing.T) {
+	const temperatureMessage = "26.2C inside, 23.1C outside; open windows briefly because outdoor conditions are suitable."
+	const humidityMessage = "Humidity is 28%; outside air is similarly dry, so add moisture after airing."
+	userInput := ""
+	modelServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var payload struct {
+			Input []struct {
+				Role    string `json:"role"`
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"input"`
 		}
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Errorf("decode request: %v", err)
+			response.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		for _, input := range payload.Input {
+			if input.Role == "user" && len(input.Content) > 0 {
+				userInput = input.Content[0].Text
+			}
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{"output_text":"{\"alerts\":[{\"topic\":\"temperature\",\"kind\":\"alert\",\"severity\":\"warn\",\"title\":\"Cooler outside\",\"message\":\"26.2C inside, 23.1C outside; open windows briefly because outdoor conditions are suitable.\",\"uses_outdoor_context\":true},{\"topic\":\"humidity\",\"kind\":\"alert\",\"severity\":\"warn\",\"title\":\"Air remains dry\",\"message\":\"Humidity is 28%; outside air is similarly dry, so add moisture after airing.\",\"uses_outdoor_context\":true}]}"}`))
+	}))
+	defer modelServer.Close()
+
+	outdoorTemperature := 23.1
+	outdoorHumidity := 34.0
+	outdoorPM2 := 5.9
+	outdoorPM10 := 8.2
+	weatherSources, airQualitySources := outdoorGuidanceTestSources()
+	analyzer := NewOpenAIAlertAnalyzerWithOutdoor(
+		"test-key",
+		"test-model",
+		"low",
+		modelServer.URL,
+		3,
+		defaultAlertThresholds(),
+		staticOutdoorContext{conditions: OutdoorConditions{
+			TemperatureC:       &outdoorTemperature,
+			RelativeHumidity:   &outdoorHumidity,
+			PM2:                &outdoorPM2,
+			PM10:               &outdoorPM10,
+			AirQualityCategory: "fair",
+			TemperatureSources: weatherSources,
+			HumiditySources:    weatherSources,
+			AirQualitySources:  airQualitySources,
+		}},
+	)
+
+	alerts, err := analyzer.Analyze(context.Background(), []SensorReading{{
+		Timestamp:   1738886400,
+		Temperature: 26.2,
+		Humidity:    28,
+		PM2:         3,
+		PM10:        4,
+	}})
+	if err != nil {
+		t.Fatalf("analyze: %v", err)
 	}
-	if !alert.UsesOutdoorContext {
-		t.Fatalf("expected guidance to declare outdoor context, got %#v", alert)
+	if strings.Contains(userInput, "recommendation_plan") || !strings.Contains(userInput, `"relative_humidity":34`) {
+		t.Fatalf("expected outdoor humidity without a recommendation plan, got %q", userInput)
 	}
-	if len(alert.Sources) != len(temperatureSources)+len(airQualitySources) {
-		t.Fatalf("expected weather and air-quality sources, got %#v", alert.Sources)
+	if len(alerts) != 2 {
+		t.Fatalf("expected two concise insights, got %#v", alerts)
+	}
+	for _, alert := range alerts {
+		switch alert.Topic {
+		case "temperature":
+			if alert.Message != temperatureMessage || strings.Contains(strings.ToLower(alert.Message), "humidity") {
+				t.Fatalf("expected concise temperature-owned copy, got %#v", alert)
+			}
+			if len(alert.Sources) != 3 {
+				t.Fatalf("expected combined ventilation sources, got %#v", alert.Sources)
+			}
+		case "humidity":
+			if alert.Message != humidityMessage {
+				t.Fatalf("expected model humidity comparison to survive, got %#v", alert)
+			}
+			if len(alert.Sources) != 1 || alert.Sources[0].Title != "Open-Meteo weather" {
+				t.Fatalf("expected humidity-only source attribution, got %#v", alert.Sources)
+			}
+		default:
+			t.Fatalf("unexpected topic %#v", alert)
+		}
 	}
 }
 
 func TestOpenAIAlertAnalyzerKeepsWindowsClosedWhenOutdoorAirIsUnsafeForCooling(t *testing.T) {
 	outdoorTemperature := 23.0
+	outdoorHumidity := 55.0
 	safePM2 := 5.0
 	safePM10 := 10.0
 	highPM2 := 9.0
@@ -369,6 +475,7 @@ func TestOpenAIAlertAnalyzerKeepsWindowsClosedWhenOutdoorAirIsUnsafeForCooling(t
 			name: "poor category",
 			conditions: OutdoorConditions{
 				TemperatureC:       &outdoorTemperature,
+				RelativeHumidity:   &outdoorHumidity,
 				PM2:                &safePM2,
 				PM10:               &safePM10,
 				AirQualityCategory: "poor",
@@ -380,6 +487,7 @@ func TestOpenAIAlertAnalyzerKeepsWindowsClosedWhenOutdoorAirIsUnsafeForCooling(t
 			name: "particulate above safe threshold",
 			conditions: OutdoorConditions{
 				TemperatureC:       &outdoorTemperature,
+				RelativeHumidity:   &outdoorHumidity,
 				PM2:                &highPM2,
 				PM10:               &safePM10,
 				AirQualityCategory: "good",
@@ -391,6 +499,7 @@ func TestOpenAIAlertAnalyzerKeepsWindowsClosedWhenOutdoorAirIsUnsafeForCooling(t
 			name: "incomplete particulate data",
 			conditions: OutdoorConditions{
 				TemperatureC:       &outdoorTemperature,
+				RelativeHumidity:   &outdoorHumidity,
 				PM2:                &safePM2,
 				AirQualityCategory: "good",
 				TemperatureSources: temperatureSources,
@@ -401,23 +510,17 @@ func TestOpenAIAlertAnalyzerKeepsWindowsClosedWhenOutdoorAirIsUnsafeForCooling(t
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			analyzer := newOutdoorTemperatureGuidanceTestAnalyzer(t, test.conditions)
-			alerts, err := analyzer.Analyze(context.Background(), []SensorReading{{
+			summary := buildAlertSummary([]SensorReading{{
 				Timestamp:   1738886400,
 				Temperature: 25.8,
 				Humidity:    45,
 				PM2:         3,
 				PM10:        5,
 			}})
-			if err != nil {
-				t.Fatalf("analyze: %v", err)
-			}
-			if len(alerts) != 1 {
-				t.Fatalf("expected one guarded insight, got %#v", alerts)
-			}
-			alert := alerts[0]
-			if alert.Topic != "temperature" {
-				t.Fatalf("expected temperature guidance, got %#v", alert)
+			alert := Alert{Topic: "temperature", Title: "Cooler outside", Message: "Open windows briefly to cool the room."}
+			decision := enforceOutdoorVentilationSafety(&alert, summary, test.conditions, defaultAlertThresholds())
+			if decision != ventilationBlocked {
+				t.Fatalf("expected ventilation to be blocked, got %v", decision)
 			}
 			if recommendsOpeningWindows(alert.Title + " " + alert.Message) {
 				t.Fatalf("expected window-opening advice to be blocked, got %#v", alert)
@@ -494,6 +597,7 @@ func TestDailyLimitedAnalyzerRetainsOutdoorCoolingGuidanceAfterModelBudgetIsExha
 	defer modelServer.Close()
 
 	outdoorTemperature := 23.0
+	outdoorHumidity := 55.0
 	outdoorPM2 := 5.0
 	outdoorPM10 := 10.0
 	temperatureSources, airQualitySources := outdoorGuidanceTestSources()
@@ -507,10 +611,12 @@ func TestDailyLimitedAnalyzerRetainsOutdoorCoolingGuidanceAfterModelBudgetIsExha
 		thresholds,
 		staticOutdoorContext{conditions: OutdoorConditions{
 			TemperatureC:       &outdoorTemperature,
+			RelativeHumidity:   &outdoorHumidity,
 			PM2:                &outdoorPM2,
 			PM10:               &outdoorPM10,
 			AirQualityCategory: "good",
 			TemperatureSources: temperatureSources,
+			HumiditySources:    temperatureSources,
 			AirQualitySources:  airQualitySources,
 		}},
 	)
@@ -580,6 +686,7 @@ func TestOpenAIAlertAnalyzerAttachesSourcesOnlyWhenOutdoorContextIsUsed(t *testi
 	defer server.Close()
 
 	outdoorTemperature := 22.0
+	outdoorHumidity := 50.0
 	outdoorPM2 := 1.0
 	outdoorPM10 := 2.0
 	privatePostcode := strings.Join([]string{"A", "A", "1", " ", "1", "A", "A"}, "")
@@ -593,11 +700,13 @@ func TestOpenAIAlertAnalyzerAttachesSourcesOnlyWhenOutdoorContextIsUsed(t *testi
 	outdoorProvider.hasCoordinates = true
 	outdoorProvider.latest = OutdoorConditions{
 		TemperatureC:       &outdoorTemperature,
+		RelativeHumidity:   &outdoorHumidity,
 		PM2:                &outdoorPM2,
 		PM10:               &outdoorPM10,
 		AirQualityCategory: "good",
 		FetchedAt:          outdoorNow.UnixMilli(),
 		TemperatureSources: []AlertSource{{Title: "Open-Meteo weather", URL: "https://open-meteo.com/en/docs"}},
+		HumiditySources:    []AlertSource{{Title: "Open-Meteo weather", URL: "https://open-meteo.com/en/docs"}},
 		AirQualitySources: []AlertSource{
 			{Title: "Open-Meteo air quality", URL: "https://open-meteo.com/en/docs/air-quality-api"},
 			{Title: "CAMS", URL: "https://atmosphere.copernicus.eu/"},
@@ -630,7 +739,7 @@ func TestOpenAIAlertAnalyzerAttachesSourcesOnlyWhenOutdoorContextIsUsed(t *testi
 	if !alerts[0].UsesOutdoorContext {
 		t.Fatalf("expected validated ventilation advice to force outdoor attribution, got %#v", alerts[0])
 	}
-	for _, expected := range []string{`"outdoor"`, `"temperature_c":22`, `"pm2":1`, `"pm10":2`} {
+	for _, expected := range []string{`"outdoor"`, `"temperature_c":22`, `"relative_humidity":50`, `"pm2":1`, `"pm10":2`} {
 		if !strings.Contains(userInput, expected) {
 			t.Fatalf("expected model input to contain outdoor metric %s", expected)
 		}
@@ -646,8 +755,8 @@ func TestOpenAIAlertAnalyzerAttachesSourcesOnlyWhenOutdoorContextIsUsed(t *testi
 		t.Fatal("expected model telemetry payload to be valid JSON")
 	}
 	allowedOutdoorFields := map[string]struct{}{
-		"temperature_c": {}, "pm2": {}, "pm10": {}, "air_quality_category": {},
-		"temperature_observed_at": {}, "air_quality_observed_at": {},
+		"temperature_c": {}, "relative_humidity": {}, "pm2": {}, "pm10": {}, "air_quality_category": {},
+		"temperature_observed_at": {}, "humidity_observed_at": {}, "air_quality_observed_at": {},
 		"data_quality": {}, "fetched_at": {},
 	}
 	for field := range analysisPayload.Outdoor {
@@ -774,6 +883,7 @@ func TestOpenAIAlertAnalyzerBlocksWindowAdviceWhenOutdoorAirIsPoor(t *testing.T)
 	defer server.Close()
 
 	outdoorTemperature := 20.0
+	outdoorHumidity := 50.0
 	outdoorPM2 := 45.0
 	outdoorPM10 := 60.0
 	analyzer := NewOpenAIAlertAnalyzerWithOutdoor(
@@ -785,10 +895,12 @@ func TestOpenAIAlertAnalyzerBlocksWindowAdviceWhenOutdoorAirIsPoor(t *testing.T)
 		defaultAlertThresholds(),
 		staticOutdoorContext{conditions: OutdoorConditions{
 			TemperatureC:       &outdoorTemperature,
+			RelativeHumidity:   &outdoorHumidity,
 			PM2:                &outdoorPM2,
 			PM10:               &outdoorPM10,
 			AirQualityCategory: "poor",
 			TemperatureSources: []AlertSource{{Title: "Open-Meteo", URL: "https://open-meteo.com/en/docs"}},
+			HumiditySources:    []AlertSource{{Title: "Open-Meteo", URL: "https://open-meteo.com/en/docs"}},
 			AirQualitySources:  []AlertSource{{Title: "CAMS", URL: "https://atmosphere.copernicus.eu/"}},
 		}},
 	)
@@ -812,7 +924,7 @@ func TestOpenAIAlertAnalyzerBlocksWindowAdviceWhenOutdoorAirIsPoor(t *testing.T)
 	if !strings.Contains(alerts[0].Message, "Keep windows closed") {
 		t.Fatalf("expected explicit closed-window advice, got %q", alerts[0].Message)
 	}
-	if alerts[0].Title != "Keep windows closed for now" {
+	if alerts[0].Title != "Use indoor temperature controls" {
 		t.Fatalf("expected unsafe title to be replaced, got %q", alerts[0].Title)
 	}
 	if !alerts[0].UsesOutdoorContext || len(alerts[0].Sources) != 2 {
@@ -1222,7 +1334,7 @@ func TestNormalizeAlertMessageRemovesCriticalCopyForWatchSeverity(t *testing.T) 
 	}
 }
 
-func TestNormalizeAlertsPreservesCompleteActionCopy(t *testing.T) {
+func TestNormalizeAlertsCapsLongCopy(t *testing.T) {
 	message := "Indoor temperature is 26.8°C and rose 1.6°C in 10 minutes. Consider lowering the thermostat, increasing ventilation, or using fans to bring the room back into the comfortable 18–26°C range. Continue monitoring until it settles."
 	summary := alertSummary{
 		Latest: metricSnapshot{
@@ -1246,8 +1358,9 @@ func TestNormalizeAlertsPreservesCompleteActionCopy(t *testing.T) {
 	if len(alerts) != 1 {
 		t.Fatalf("expected one alert, got %d", len(alerts))
 	}
-	if alerts[0].Message != message {
-		t.Fatalf("expected complete message, got %q", alerts[0].Message)
+	if alerts[0].Message == message || utf8.RuneCountInString(alerts[0].Message) > alertMessageMaxLength ||
+		!strings.HasSuffix(alerts[0].Message, "…") {
+		t.Fatalf("expected concise truncated message, got %q", alerts[0].Message)
 	}
 }
 
