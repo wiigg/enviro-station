@@ -63,6 +63,7 @@ const (
 	secondsPerMinute                 = int64(60)
 	defaultInsightsDailyRequestLimit = 48
 	insightsMaxOutputTokens          = 1200
+	outdoorCoolingHighMargin         = 0.5
 )
 
 const locationCoordinateNumberPattern = `[+-]?[0-9]{1,3}\.[0-9]{2,}`
@@ -120,6 +121,14 @@ type dailyLimitedAlertAnalyzer struct {
 	lastSource string
 }
 
+type outdoorAlertGuidance interface {
+	applyOutdoorGuidance(
+		ctx context.Context,
+		alerts []Alert,
+		summary alertSummary,
+	) []Alert
+}
+
 func NewDailyLimitedAlertAnalyzer(
 	analyzer AlertAnalyzer,
 	dailyLimit int,
@@ -158,7 +167,15 @@ func (analyzer *dailyLimitedAlertAnalyzer) Analyze(
 		log.Printf("insights model daily request limit reached; using deterministic insights")
 	}
 	analyzer.setSource("rules")
-	return fallbackAlerts(buildAlertSummary(readings), analyzer.maxAlerts, analyzer.thresholds), nil
+	summary := buildAlertSummary(readings)
+	alerts := fallbackAlerts(summary, analyzer.maxAlerts, analyzer.thresholds)
+	if guidance, ok := analyzer.analyzer.(outdoorAlertGuidance); ok {
+		alerts = guidance.applyOutdoorGuidance(ctx, alerts, summary)
+	}
+	if alertsContainPrivateLocation(alerts) {
+		return nil, errGeneratedAlertPrivacyCheck
+	}
+	return alerts, nil
 }
 
 func (analyzer *dailyLimitedAlertAnalyzer) Source() string {
@@ -295,6 +312,30 @@ func newOpenAIAlertAnalyzer(
 
 func (analyzer *openAIAlertAnalyzer) Source() string {
 	return "openai"
+}
+
+func (analyzer *openAIAlertAnalyzer) applyOutdoorGuidance(
+	ctx context.Context,
+	alerts []Alert,
+	summary alertSummary,
+) []Alert {
+	if analyzer.outdoorContext == nil {
+		return alerts
+	}
+	conditions, ok := analyzer.outdoorContext.Snapshot()
+	if !ok {
+		if refresher, refreshable := analyzer.outdoorContext.(OutdoorContextRefresher); refreshable {
+			conditions, ok = refresher.EnsureFresh(ctx)
+		}
+	}
+	return applyOutdoorTemperatureGuidance(
+		alerts,
+		summary,
+		conditions,
+		ok,
+		analyzer.maxAlerts,
+		analyzer.thresholds,
+	)
 }
 
 func (analyzer *openAIAlertAnalyzer) Analyze(
@@ -452,6 +493,17 @@ func (analyzer *openAIAlertAnalyzer) Analyze(
 			alerts[index].Sources = nil
 		}
 	}
+	alerts = applyOutdoorTemperatureGuidance(
+		alerts,
+		summary,
+		outdoorConditions,
+		hasOutdoorConditions,
+		analyzer.maxAlerts,
+		analyzer.thresholds,
+	)
+	if alertsContainPrivateLocation(alerts) {
+		return nil, errGeneratedAlertPrivacyCheck
+	}
 	if len(alerts) == 0 {
 		fallback := fallbackAlerts(summary, analyzer.maxAlerts, analyzer.thresholds)
 		if len(fallback) > 0 {
@@ -547,7 +599,7 @@ func enforceOutdoorVentilationSafety(
 		return ventilationNotApplicable
 	}
 	if (alert.Topic == "air_quality" || alert.Topic == "temperature") &&
-		outdoorAirSupportsVentilation(summary, conditions) &&
+		outdoorAirSupportsVentilation(summary, conditions, thresholds) &&
 		outdoorTemperatureSupportsVentilation(summary, conditions, thresholds) {
 		alert.UsesOutdoorContext = true
 		return ventilationAllowed
@@ -568,6 +620,135 @@ func enforceOutdoorVentilationSafety(
 	}
 	alert.Message = trimToLength(alert.Message, alertMessageMaxLength)
 	return ventilationBlocked
+}
+
+func applyOutdoorTemperatureGuidance(
+	alerts []Alert,
+	summary alertSummary,
+	conditions OutdoorConditions,
+	hasOutdoorConditions bool,
+	maxAlerts int,
+	thresholds AlertThresholds,
+) []Alert {
+	if !hasOutdoorConditions ||
+		!outdoorCoolingOpportunity(summary, conditions, thresholds) {
+		return alerts
+	}
+
+	indoorTemperature := summary.Latest.Temperature
+	outdoorTemperature := *conditions.TemperatureC
+	severity := normalizeAlertSeverity("temperature", "info", summary, thresholds)
+	kind := "tip"
+	if severity == "warn" || severity == "critical" {
+		kind = "alert"
+	}
+	sources := mergeAlertSources(
+		conditions.TemperatureSources,
+		conditions.AirQualitySources,
+		conditions.Sources,
+	)
+	if len(sources) == 0 {
+		return alerts
+	}
+
+	guidance := Alert{
+		Topic:              "temperature",
+		Kind:               kind,
+		Severity:           severity,
+		UsesOutdoorContext: true,
+		Sources:            sources,
+	}
+	temperatureContext := fmt.Sprintf(
+		"It is %.1fC indoors and %.1fC outside.",
+		indoorTemperature,
+		outdoorTemperature,
+	)
+	if trend := temperatureTrendSummary(summary, thresholds); trend != "" {
+		temperatureContext += " " + trend
+	}
+	outdoorAirSummary := outdoorAirQualitySummary(conditions)
+	if outdoorAirSupportsVentilation(summary, conditions, thresholds) {
+		guidance.Title = "Cooler air outside"
+		guidance.Message = fmt.Sprintf(
+			"%s Outdoor air quality is %s and supports opening windows briefly to help cool the room.",
+			temperatureContext,
+			outdoorAirSummary,
+		)
+	} else {
+		guidance.Title = "Keep windows closed for now"
+		guidance.Message = fmt.Sprintf(
+			"%s Outdoor air quality is %s and does not support ventilation right now. Keep windows closed and use fans or other indoor cooling.",
+			temperatureContext,
+			outdoorAirSummary,
+		)
+	}
+	guidance.Message = trimToLength(guidance.Message, alertMessageMaxLength)
+
+	for index := range alerts {
+		if alerts[index].Topic == "temperature" {
+			guidance.Severity = bumpAlertSeverity(guidance.Severity, alerts[index].Severity)
+			if alerts[index].Kind == "alert" || guidance.Severity != "info" {
+				guidance.Kind = "alert"
+			}
+			alerts[index] = guidance
+			return alerts
+		}
+	}
+	for index := range alerts {
+		if alerts[index].Topic == "general" {
+			alerts[index] = guidance
+			return alerts
+		}
+	}
+	if maxAlerts > 0 && len(alerts) < maxAlerts {
+		return append(alerts, guidance)
+	}
+	return alerts
+}
+
+func temperatureTrendSummary(summary alertSummary, thresholds AlertThresholds) string {
+	delta := summary.Delta10m.Temperature
+	switch {
+	case delta >= thresholds.TemperatureDeltaTrigger:
+		return fmt.Sprintf("Temperature rose %.1fC over 10 min.", delta)
+	case delta <= -thresholds.TemperatureDeltaTrigger:
+		return fmt.Sprintf("Temperature fell %.1fC over 10 min.", math.Abs(delta))
+	default:
+		return ""
+	}
+}
+
+func outdoorAirQualitySummary(conditions OutdoorConditions) string {
+	category := strings.ReplaceAll(normalizedOutdoorAirQualityCategory(conditions.AirQualityCategory), "_", " ")
+	if category == "unknown" {
+		category = "unavailable"
+	}
+	if conditions.PM2 != nil && conditions.PM10 != nil {
+		return fmt.Sprintf(
+			"%s (PM2.5 %.1f and PM10 %.1f ug/m3)",
+			category,
+			*conditions.PM2,
+			*conditions.PM10,
+		)
+	}
+	return category + " with incomplete particulate data"
+}
+
+func outdoorCoolingOpportunity(
+	summary alertSummary,
+	conditions OutdoorConditions,
+	thresholds AlertThresholds,
+) bool {
+	if conditions.TemperatureC == nil {
+		return false
+	}
+	indoor := summary.Latest.Temperature
+	outdoor := *conditions.TemperatureC
+	return indoor >= thresholds.TemperatureHighThreshold-outdoorCoolingHighMargin &&
+		outdoor >= thresholds.TemperatureLowThreshold &&
+		outdoor < thresholds.TemperatureHighThreshold &&
+		indoor-outdoor >= thresholds.TemperatureDeltaTrigger &&
+		outdoorTemperatureSupportsVentilation(summary, conditions, thresholds)
 }
 
 func recommendsOpeningWindows(message string) bool {
@@ -737,22 +918,60 @@ func containsAnyWord(text string, words ...string) bool {
 	return false
 }
 
-func outdoorAirSupportsVentilation(summary alertSummary, conditions OutdoorConditions) bool {
-	switch conditions.AirQualityCategory {
-	case "poor", "very_poor", "extremely_poor":
+func outdoorAirSupportsVentilation(
+	summary alertSummary,
+	conditions OutdoorConditions,
+	thresholds AlertThresholds,
+) bool {
+	category := normalizedOutdoorAirQualityCategory(conditions.AirQualityCategory)
+	if category != "good" && category != "fair" {
 		return false
 	}
+	if conditions.PM2 == nil || conditions.PM10 == nil {
+		return false
+	}
+	return outdoorParticulateSupportsVentilation(
+		*conditions.PM2,
+		summary.Latest.PM2,
+		thresholds.PM2Threshold,
+		summary.ParticulateAvailable,
+	) && outdoorParticulateSupportsVentilation(
+		*conditions.PM10,
+		summary.Latest.PM10,
+		thresholds.PM10Threshold,
+		summary.ParticulateAvailable,
+	)
+}
 
-	if summary.ParticulateAvailable {
-		if conditions.PM2 == nil || conditions.PM10 == nil {
-			return false
-		}
-		if *conditions.PM2 >= summary.Latest.PM2 || *conditions.PM10 >= summary.Latest.PM10 {
-			return false
-		}
+func outdoorParticulateSupportsVentilation(
+	outdoor float64,
+	indoor float64,
+	threshold float64,
+	indoorAvailable bool,
+) bool {
+	if outdoor < threshold {
 		return true
 	}
-	return conditions.AirQualityCategory == "good" || conditions.AirQualityCategory == "fair"
+	return indoorAvailable && indoor >= threshold && outdoor < indoor
+}
+
+func normalizedOutdoorAirQualityCategory(category string) string {
+	switch strings.ToLower(strings.TrimSpace(category)) {
+	case "good":
+		return "good"
+	case "fair":
+		return "fair"
+	case "moderate":
+		return "moderate"
+	case "poor":
+		return "poor"
+	case "very_poor":
+		return "very_poor"
+	case "extremely_poor":
+		return "extremely_poor"
+	default:
+		return "unknown"
+	}
 }
 
 func outdoorTemperatureSupportsVentilation(
@@ -789,7 +1008,8 @@ func systemPrompt(maxAlerts int, thresholds AlertThresholds) string {
 			"Otherwise return only the noteworthy topics and omit stable ones. "+
 			"Each non-general alert must focus on one topic only and must not bundle unrelated metrics. "+
 			"When particulate_available is false, do not discuss, infer, or generate alerts from PM values because they are unavailable. "+
-			"When an outdoor object is provided, use it only in an air_quality insight when current outdoor particulate values or air-quality category changes ventilation advice, or in a temperature insight when outdoor temperature changes whether bringing outdoor air inside would move the room toward the 18-26C comfort range. Never use outdoor context for humidity, merely mention the weather, or make a comparison unsupported by available outdoor fields. Never recommend opening windows, doors, vents, or otherwise bringing outdoor air inside when outdoor particulate conditions are worse or when outdoor temperature would move the room farther from comfort. "+
+			"When an outdoor object is provided, use it only in an air_quality insight when current outdoor particulate values or air-quality category changes ventilation advice, or in a temperature insight when outdoor temperature changes whether bringing outdoor air inside would move the room toward the 18-26C comfort range. Never use outdoor context for humidity, merely mention the weather, or make a comparison unsupported by available outdoor fields. Never recommend opening windows, doors, vents, or otherwise bringing outdoor air inside unless outdoor air quality is good or fair, both PM values are available, and each PM value is below its configured alert threshold or improves on an already-elevated indoor value. Never recommend it when outdoor temperature would move the room farther from comfort. "+
+			"When indoor temperature is near the upper comfort boundary and outdoor air is materially cooler within the comfort range, explicitly advise whether brief window opening is suitable based on outdoor air quality; do not merely call the indoor temperature comfortable. "+
 			"If outdoor context does not change the recommended action, ignore it. "+
 			"Never mention or infer a postcode, address, town, coordinates, or station location. Set uses_outdoor_context true only when the insight materially relies on the outdoor object; otherwise set it false. "+
 			"For air_quality discuss PM2.5 and PM10 only, treating PM2.5 at or above %.1f ug/m3, PM10 at or above %.1f ug/m3, or 10 minute moves of %.1f/%.1f ug/m3 as noteworthy. "+

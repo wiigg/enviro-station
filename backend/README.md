@@ -160,8 +160,9 @@ Insights are precomputed in the backend, not generated per request.
 - Outdoor context is fetched server-side every two hours and cached in memory: Postcodes.io resolves the configured UK postcode, while Open-Meteo supplies current temperature and modelled CAMS European PM2.5, PM10, and AQI
 - Initial failures or missing outdoor components retry every five minutes until a complete temperature and particulate snapshot is available
 - Weather and air-quality timestamps must be current, and component failures degrade independently so one unavailable feed does not mislabel the other
-- Every model run receives the cached outdoor metrics; ventilation advice is allowed only when outdoor particulate and temperature conditions both support it
-- A deterministic post-check replaces unsafe window-opening advice even if model output contradicts that rule; rules-only fallback insights never recommend ventilation without outdoor context
+- Every model run receives the cached outdoor metrics. When the room is within `0.5C` of the upper comfort boundary and outdoor air is at least the configured temperature delta cooler while remaining in the comfort range, a deterministic post-check replaces generic comfort text with an explicit ventilation decision
+- Brief window opening is recommended only with complete `good` or `fair` outdoor air data whose PM2.5 and PM10 values are below the configured alert thresholds, or improve on already-elevated indoor values. Otherwise the insight explicitly says to keep windows closed and use indoor cooling
+- The same deterministic outdoor guidance applies when the model-call budget is exhausted. If the insight limit is reduced below the default three, higher-priority air-quality and humidity alerts remain ahead of temperature guidance; rules-only insights never recommend ventilation without fresh outdoor context
 - OpenAI insight calls are capped per process per UTC day; deterministic threshold insights continue immediately after that budget is exhausted
 - Material outdoor changes and recovery from unavailable or stale context trigger a new insight; source links are attached only when an insight uses outdoor context
 - `OUTDOOR_LOCATION` is never returned by an API endpoint or included in browser requests; location and outdoor-data lookups happen only from the backend
