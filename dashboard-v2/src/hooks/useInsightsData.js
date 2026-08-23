@@ -25,7 +25,7 @@ export function useInsightsData(backendBaseUrl) {
           endpointName: "Insights endpoint",
           requestUrl: insightsUrl,
           signal,
-          unavailableMessage: "AI insights are currently unavailable.",
+          unavailableMessage: "Insights are currently unavailable.",
           warningLabel: "Insights"
         });
 
@@ -51,7 +51,7 @@ export function useInsightsData(backendBaseUrl) {
         }
         const diagnostic = error instanceof Error ? error.message : "failed to load insights";
         console.error("Insights fetch error", diagnostic);
-        setInsightsError("AI insights are currently unavailable.");
+        setInsightsError("Insights are currently unavailable.");
       } finally {
         if (!isClosed()) {
           setIsLoadingInsights(false);

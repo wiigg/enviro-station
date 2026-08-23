@@ -598,6 +598,10 @@ func (api *API) handleInsights(response http.ResponseWriter, request *http.Reque
 		writeError(response, http.StatusServiceUnavailable, "insights are warming up")
 		return
 	}
+	if insightsSnapshotContainsPrivateLocation(snapshot) {
+		writeError(response, http.StatusServiceUnavailable, "insights are unavailable")
+		return
+	}
 
 	writeJSON(response, http.StatusOK, map[string]any{
 		"insights":         snapshot.Insights,

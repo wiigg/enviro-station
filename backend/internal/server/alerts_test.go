@@ -3,10 +3,12 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -85,6 +87,8 @@ func TestSystemPromptDefinesWhenOutdoorContextIsUseful(t *testing.T) {
 		"only in an air_quality insight",
 		"or in a temperature insight",
 		"Never use outdoor context for humidity",
+		"Never recommend opening windows, doors, vents, or otherwise bringing outdoor air inside",
+		"outdoor temperature would move the room farther from comfort",
 		"If outdoor context does not change the recommended action, ignore it",
 	} {
 		if !strings.Contains(prompt, expected) {
@@ -102,13 +106,236 @@ func (source staticOutdoorContext) Snapshot() (OutdoorConditions, bool) {
 }
 
 func TestOpenAIAlertAnalyzerAttachesSourcesOnlyWhenOutdoorContextIsUsed(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+	userInput := ""
+	requestBody := []byte(nil)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var payload struct {
+			Input []struct {
+				Role    string `json:"role"`
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"input"`
+		}
+		var err error
+		requestBody, err = io.ReadAll(request.Body)
+		if err != nil {
+			t.Errorf("read request: %v", err)
+			response.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if err := json.Unmarshal(requestBody, &payload); err != nil {
+			t.Errorf("decode request: %v", err)
+			response.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		for _, input := range payload.Input {
+			if input.Role == "user" && len(input.Content) > 0 {
+				userInput = input.Content[0].Text
+			}
+		}
 		response.Header().Set("Content-Type", "application/json")
-		_, _ = response.Write([]byte(`{"output_text":"{\"alerts\":[{\"topic\":\"temperature\",\"kind\":\"tip\",\"severity\":\"info\",\"title\":\"Cooler air outside\",\"message\":\"Outdoor air is cooler, so brief ventilation may help.\",\"uses_outdoor_context\":true}]}"}`))
+		_, _ = response.Write([]byte(`{"output_text":"{\"alerts\":[{\"topic\":\"temperature\",\"kind\":\"tip\",\"severity\":\"info\",\"title\":\"Cooler air outside\",\"message\":\"Outdoor air is cooler, so brief ventilation may help.\",\"uses_outdoor_context\":false}]}"}`))
 	}))
 	defer server.Close()
 
-	outdoorTemperature := 15.0
+	outdoorTemperature := 22.0
+	outdoorPM2 := 1.0
+	outdoorPM10 := 2.0
+	privatePostcode := strings.Join([]string{"A", "A", "1", " ", "1", "A", "A"}, "")
+	privateLatitude := strings.Join([]string{"51", ".", "507351"}, "")
+	privateLongitude := strings.Join([]string{"-0", ".", "127758"}, "")
+	outdoorNow := time.Unix(1738886400, 0)
+	outdoorProvider := NewOpenMeteoOutdoorProvider(OutdoorProviderConfig{Location: privatePostcode})
+	outdoorProvider.now = func() time.Time { return outdoorNow }
+	outdoorProvider.latitude = 51.507351
+	outdoorProvider.longitude = -0.127758
+	outdoorProvider.hasCoordinates = true
+	outdoorProvider.latest = OutdoorConditions{
+		TemperatureC:       &outdoorTemperature,
+		PM2:                &outdoorPM2,
+		PM10:               &outdoorPM10,
+		AirQualityCategory: "good",
+		FetchedAt:          outdoorNow.UnixMilli(),
+		TemperatureSources: []AlertSource{{Title: "Open-Meteo weather", URL: "https://open-meteo.com/en/docs"}},
+		AirQualitySources: []AlertSource{
+			{Title: "Open-Meteo air quality", URL: "https://open-meteo.com/en/docs/air-quality-api"},
+			{Title: "CAMS", URL: "https://atmosphere.copernicus.eu/"},
+		},
+	}
+	outdoorProvider.hasLatest = true
+	analyzer := NewOpenAIAlertAnalyzerWithOutdoor(
+		"test-key",
+		"test-model",
+		"low",
+		server.URL,
+		1,
+		defaultAlertThresholds(),
+		outdoorProvider,
+	)
+
+	alerts, err := analyzer.Analyze(context.Background(), []SensorReading{{
+		Timestamp:   1738886400,
+		Temperature: 27,
+		Humidity:    45,
+		PM2:         3,
+		PM10:        5,
+	}})
+	if err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+	if len(alerts) != 1 || len(alerts[0].Sources) != 3 {
+		t.Fatalf("expected outdoor source on insight, got %#v", alerts)
+	}
+	if !alerts[0].UsesOutdoorContext {
+		t.Fatalf("expected validated ventilation advice to force outdoor attribution, got %#v", alerts[0])
+	}
+	for _, expected := range []string{`"outdoor"`, `"temperature_c":22`, `"pm2":1`, `"pm10":2`} {
+		if !strings.Contains(userInput, expected) {
+			t.Fatalf("expected model input to contain outdoor metric %s", expected)
+		}
+	}
+	inputParts := strings.SplitN(userInput, "\n", 2)
+	if len(inputParts) != 2 {
+		t.Fatal("expected model input to contain a JSON telemetry payload")
+	}
+	var analysisPayload struct {
+		Outdoor map[string]any `json:"outdoor"`
+	}
+	if err := json.Unmarshal([]byte(inputParts[1]), &analysisPayload); err != nil {
+		t.Fatal("expected model telemetry payload to be valid JSON")
+	}
+	allowedOutdoorFields := map[string]struct{}{
+		"temperature_c": {}, "pm2": {}, "pm10": {}, "air_quality_category": {},
+		"temperature_observed_at": {}, "air_quality_observed_at": {},
+		"data_quality": {}, "fetched_at": {},
+	}
+	for field := range analysisPayload.Outdoor {
+		if _, allowed := allowedOutdoorFields[field]; !allowed {
+			t.Fatal("model input included a non-metric outdoor field")
+		}
+	}
+	for _, privateValue := range []string{privatePostcode, privateLatitude, privateLongitude} {
+		if strings.Contains(string(requestBody), privateValue) {
+			t.Fatal("expected the complete model request to exclude private location data")
+		}
+	}
+}
+
+func TestOpenAIAlertAnalyzerRejectsPrivateLocationInGeneratedText(t *testing.T) {
+	postcode := strings.Join([]string{"A", "A", "1", " ", "1", "A", "A"}, "")
+	coordinates := strings.Join([]string{"51", ".", "51", ", ", "-0", ".", "13"}, "")
+	tests := []struct {
+		name      string
+		title     string
+		message   string
+		sensitive string
+	}{
+		{
+			name:      "postcode",
+			title:     "Local conditions near " + postcode,
+			message:   "Keep monitoring indoor air.",
+			sensitive: postcode,
+		},
+		{
+			name:      "precise coordinate pair",
+			title:     "Local conditions",
+			message:   "Outdoor readings were resolved at " + coordinates + ".",
+			sensitive: coordinates,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+				alertPayload, err := json.Marshal(map[string]any{
+					"alerts": []Alert{{
+						Topic: "general", Kind: "insight", Severity: "info",
+						Title: test.title, Message: test.message,
+					}},
+				})
+				if err != nil {
+					t.Error("encode alert payload")
+					response.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+				response.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(response).Encode(map[string]string{
+					"output_text": string(alertPayload),
+				})
+			}))
+			defer server.Close()
+
+			analyzer := NewOpenAIAlertAnalyzer(
+				"test-key",
+				"test-model",
+				"low",
+				server.URL,
+				1,
+				defaultAlertThresholds(),
+			)
+			alerts, err := analyzer.Analyze(context.Background(), []SensorReading{{
+				Timestamp: 1738886400, Temperature: 22, Humidity: 45,
+			}})
+			if err != errGeneratedAlertPrivacyCheck || alerts != nil {
+				t.Fatal("expected generated private location data to be rejected")
+			}
+			if strings.Contains(err.Error(), test.sensitive) {
+				t.Fatal("expected privacy-check error to exclude private location data")
+			}
+		})
+	}
+}
+
+func TestPrivateLocationCheckDecodesURLValues(t *testing.T) {
+	privatePostcode := strings.Join([]string{"A", "A", "1", " ", "1", "A", "A"}, "")
+	for _, encodedPostcode := range []string{
+		strings.ReplaceAll(privatePostcode, " ", "%20"),
+		strings.ReplaceAll(privatePostcode, " ", "+"),
+	} {
+		if !containsPrivateLocation("https://example.invalid/?area=" + encodedPostcode) {
+			t.Fatal("expected URL-encoded private location data to be rejected")
+		}
+	}
+}
+
+func TestOpenAIAlertAnalyzerDoesNotExposeErrorResponseBody(t *testing.T) {
+	privatePostcode := strings.Join([]string{"A", "A", "1", " ", "1", "A", "A"}, "")
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusBadRequest)
+		_, _ = response.Write([]byte("upstream echoed " + privatePostcode))
+	}))
+	defer server.Close()
+
+	analyzer := NewOpenAIAlertAnalyzer(
+		"test-key",
+		"test-model",
+		"low",
+		server.URL,
+		1,
+		defaultAlertThresholds(),
+	)
+	_, err := analyzer.Analyze(context.Background(), []SensorReading{{
+		Timestamp: 1738886400, Temperature: 22, Humidity: 45,
+	}})
+	if err == nil {
+		t.Fatal("expected upstream error")
+	}
+	if strings.Contains(err.Error(), privatePostcode) {
+		t.Fatal("upstream error body exposed private location data")
+	}
+}
+
+func TestOpenAIAlertAnalyzerBlocksWindowAdviceWhenOutdoorAirIsPoor(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{"output_text":"{\"alerts\":[{\"topic\":\"temperature\",\"kind\":\"tip\",\"severity\":\"info\",\"title\":\"Open windows now\",\"message\":\"Outdoor air is cooler than the room.\",\"uses_outdoor_context\":true}]}"}`))
+	}))
+	defer server.Close()
+
+	outdoorTemperature := 20.0
+	outdoorPM2 := 45.0
+	outdoorPM10 := 60.0
 	analyzer := NewOpenAIAlertAnalyzerWithOutdoor(
 		"test-key",
 		"test-model",
@@ -118,11 +345,11 @@ func TestOpenAIAlertAnalyzerAttachesSourcesOnlyWhenOutdoorContextIsUsed(t *testi
 		defaultAlertThresholds(),
 		staticOutdoorContext{conditions: OutdoorConditions{
 			TemperatureC:       &outdoorTemperature,
-			AirQualityCategory: "good",
-			Sources: []AlertSource{{
-				Title: "Met Office",
-				URL:   "https://www.metoffice.gov.uk/",
-			}},
+			PM2:                &outdoorPM2,
+			PM10:               &outdoorPM10,
+			AirQualityCategory: "poor",
+			TemperatureSources: []AlertSource{{Title: "Open-Meteo", URL: "https://open-meteo.com/en/docs"}},
+			AirQualitySources:  []AlertSource{{Title: "CAMS", URL: "https://atmosphere.copernicus.eu/"}},
 		}},
 	)
 
@@ -136,11 +363,260 @@ func TestOpenAIAlertAnalyzerAttachesSourcesOnlyWhenOutdoorContextIsUsed(t *testi
 	if err != nil {
 		t.Fatalf("analyze: %v", err)
 	}
-	if len(alerts) != 1 || len(alerts[0].Sources) != 1 {
-		t.Fatalf("expected outdoor source on insight, got %#v", alerts)
+	if len(alerts) != 1 {
+		t.Fatalf("expected one alert, got %#v", alerts)
 	}
-	if alerts[0].Sources[0].Title != "Met Office" {
-		t.Fatalf("unexpected outdoor source: %#v", alerts[0].Sources[0])
+	if recommendsOpeningWindows(alerts[0].Message) {
+		t.Fatalf("expected unsafe window advice to be removed, got %q", alerts[0].Message)
+	}
+	if !strings.Contains(alerts[0].Message, "Keep windows closed") {
+		t.Fatalf("expected explicit closed-window advice, got %q", alerts[0].Message)
+	}
+	if alerts[0].Title != "Use indoor temperature controls" {
+		t.Fatalf("expected unsafe title to be replaced, got %q", alerts[0].Title)
+	}
+	if !alerts[0].UsesOutdoorContext || len(alerts[0].Sources) != 2 {
+		t.Fatalf("expected guarded advice to retain both outdoor sources, got %#v", alerts[0])
+	}
+}
+
+func TestOpenAIAlertAnalyzerBlocksWindowAdviceWhenOutdoorDataIsUnavailable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{"output_text":"{\"alerts\":[{\"topic\":\"temperature\",\"kind\":\"tip\",\"severity\":\"info\",\"title\":\"Cool the room\",\"message\":\"Brief ventilation by opening a window may help.\",\"uses_outdoor_context\":false}]}"}`))
+	}))
+	defer server.Close()
+
+	analyzer := NewOpenAIAlertAnalyzer(
+		"test-key",
+		"test-model",
+		"low",
+		server.URL,
+		1,
+		defaultAlertThresholds(),
+	)
+	alerts, err := analyzer.Analyze(context.Background(), []SensorReading{{
+		Timestamp:   1738886400,
+		Temperature: 27,
+		Humidity:    45,
+		PM2:         3,
+		PM10:        5,
+	}})
+	if err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+	if len(alerts) != 1 || recommendsOpeningWindows(alerts[0].Message) {
+		t.Fatalf("expected window advice without outdoor data to be removed, got %#v", alerts)
+	}
+	if alerts[0].UsesOutdoorContext || len(alerts[0].Sources) != 0 {
+		t.Fatalf("expected unavailable outdoor context to remain uncited, got %#v", alerts[0])
+	}
+}
+
+func TestDeterministicFallbackDoesNotRecommendVentilationWithoutOutdoorContext(t *testing.T) {
+	summary := buildAlertSummary([]SensorReading{{
+		Timestamp:   1738886400,
+		Temperature: 28,
+		Humidity:    65,
+		PM2:         20,
+		PM10:        50,
+	}})
+	for _, alert := range fallbackAlerts(summary, 3, defaultAlertThresholds()) {
+		if recommendsOpeningWindows(alert.Message) {
+			t.Fatalf("expected deterministic fallback to avoid ventilation advice, got %#v", alert)
+		}
+	}
+}
+
+func TestRecommendsOpeningWindowsRecognizesCommonVentilationAdvice(t *testing.T) {
+	tests := []struct {
+		message string
+		want    bool
+	}{
+		{message: "Open the windows for ten minutes.", want: true},
+		{message: "Crack a window to let fresh air in.", want: true},
+		{message: "Use brief natural ventilation.", want: true},
+		{message: "Air out your home via the patio door.", want: true},
+		{message: "Bring outside air in through the French doors.", want: true},
+		{message: "Raise the sash for a cross-breeze.", want: true},
+		{message: "Vent the room for ten minutes.", want: true},
+		{message: "Open the front door to flush the room with outside air.", want: true},
+		{message: "Open the roof vents to exchange the air.", want: true},
+		{message: "Switch the outside-air intake to maximum.", want: true},
+		{message: "Leave the windows ajar.", want: true},
+		{message: "The windows should be opened for ten minutes.", want: true},
+		{message: "Enable the fresh-air intake.", want: true},
+		{message: "Turn on the outside-air supply.", want: true},
+		{message: "Run the ventilation system to draw outside air indoors.", want: true},
+		{message: "Use unfiltered mechanical ventilation with outdoor air.", want: true},
+		{message: "Do not open windows during traffic; open the windows later.", want: true},
+		{message: "Keep windows closed while outdoor air is poor.", want: false},
+		{message: "Ventilation is not recommended right now.", want: false},
+		{message: "Avoid natural ventilation.", want: false},
+		{message: "Do not use the patio door.", want: false},
+		{message: "Keep the outside-air intake off.", want: false},
+		{message: "The outdoor-air intake is closed.", want: false},
+		{message: "Do not bring fresh air in.", want: false},
+		{message: "Use thermal curtains on the window.", want: false},
+		{message: "Run the extractor fan with windows closed.", want: false},
+		{message: "Activate the purifier while the windows remain closed.", want: false},
+		{message: "Use filtered mechanical ventilation.", want: false},
+		{message: "Use fans to increase airflow.", want: false},
+		{message: "Use a filtered air purifier.", want: false},
+	}
+	for _, test := range tests {
+		if got := recommendsOpeningWindows(test.message); got != test.want {
+			t.Errorf("recommendsOpeningWindows(%q) = %t, want %t", test.message, got, test.want)
+		}
+	}
+}
+
+func TestOutdoorVentilationSafetyBlocksUnsupportedTopicsAndPartialData(t *testing.T) {
+	outdoorTemperature := 22.0
+	outdoorPM2 := 5.0
+	outdoorPM10 := 5.0
+	summary := buildAlertSummary([]SensorReading{{
+		Timestamp:   1738886400,
+		Temperature: 27,
+		Humidity:    65,
+		PM2:         10,
+		PM10:        10,
+	}})
+	tests := []struct {
+		name       string
+		alert      Alert
+		conditions OutdoorConditions
+	}{
+		{
+			name:  "humidity has no outdoor humidity context",
+			alert: Alert{Topic: "humidity", Title: "Humidity high", Message: "Increase ventilation."},
+			conditions: OutdoorConditions{
+				TemperatureC:       &outdoorTemperature,
+				PM2:                &outdoorPM2,
+				PM10:               &outdoorPM10,
+				AirQualityCategory: "good",
+			},
+		},
+		{
+			name:  "partial particulate data",
+			alert: Alert{Topic: "temperature", Title: "Cool the room", Message: "Crack a window."},
+			conditions: OutdoorConditions{
+				TemperatureC:       &outdoorTemperature,
+				PM2:                &outdoorPM2,
+				AirQualityCategory: "unknown",
+			},
+		},
+		{
+			name:  "partial particulate data with fair category",
+			alert: Alert{Topic: "temperature", Title: "Cool the room", Message: "Open a window."},
+			conditions: OutdoorConditions{
+				TemperatureC:       &outdoorTemperature,
+				PM2:                &outdoorPM2,
+				AirQualityCategory: "fair",
+			},
+		},
+		{
+			name:  "category only cannot establish cleaner outdoor air",
+			alert: Alert{Topic: "air_quality", Title: "Clear particles", Message: "Bring outside air in."},
+			conditions: OutdoorConditions{
+				TemperatureC:       &outdoorTemperature,
+				AirQualityCategory: "good",
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			decision := enforceOutdoorVentilationSafety(
+				&test.alert,
+				summary,
+				test.conditions,
+				defaultAlertThresholds(),
+			)
+			if decision != ventilationBlocked || recommendsOpeningWindows(test.alert.Title+" "+test.alert.Message) {
+				t.Fatalf("expected unsupported ventilation to be blocked, got %#v", test.alert)
+			}
+		})
+	}
+}
+
+func TestOutdoorVentilationSafetyBlocksWorseAirAndUnsuitableTemperature(t *testing.T) {
+	summary := buildAlertSummary([]SensorReading{{
+		Timestamp:   1738886400,
+		Temperature: 27,
+		Humidity:    45,
+		PM2:         10,
+		PM10:        10,
+	}})
+	safeTemperature := 22.0
+	worsePM2 := 11.0
+	lowerPM10 := 5.0
+	lowerPM2 := 5.0
+	unsuitableTemperature := 35.0
+	tests := []struct {
+		name       string
+		conditions OutdoorConditions
+	}{
+		{
+			name: "outdoor PM is worse despite fair category",
+			conditions: OutdoorConditions{
+				TemperatureC:       &safeTemperature,
+				PM2:                &worsePM2,
+				PM10:               &lowerPM10,
+				AirQualityCategory: "fair",
+			},
+		},
+		{
+			name: "outdoor temperature moves farther from comfort",
+			conditions: OutdoorConditions{
+				TemperatureC:       &unsuitableTemperature,
+				PM2:                &lowerPM2,
+				PM10:               &lowerPM10,
+				AirQualityCategory: "good",
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			alert := Alert{Topic: "temperature", Title: "Cool the room", Message: "Let fresh air in."}
+			decision := enforceOutdoorVentilationSafety(
+				&alert,
+				summary,
+				test.conditions,
+				defaultAlertThresholds(),
+			)
+			if decision != ventilationBlocked || recommendsOpeningWindows(alert.Title+" "+alert.Message) {
+				t.Fatalf("expected unsafe outdoor conditions to block ventilation, got %#v", alert)
+			}
+		})
+	}
+}
+
+func TestOutdoorVentilationSafetyTreatsDeclaredOutdoorRelianceConservatively(t *testing.T) {
+	outdoorTemperature := 20.0
+	outdoorPM2 := 45.0
+	outdoorPM10 := 60.0
+	summary := buildAlertSummary([]SensorReading{{
+		Timestamp: 1738886400, Temperature: 27, Humidity: 45, PM2: 3, PM10: 5,
+	}})
+	alert := Alert{
+		Topic:              "temperature",
+		Title:              "Cooler conditions outside",
+		Message:            "Route the outside intake through the patio access.",
+		UsesOutdoorContext: true,
+	}
+	decision := enforceOutdoorVentilationSafety(
+		&alert,
+		summary,
+		OutdoorConditions{
+			TemperatureC:       &outdoorTemperature,
+			PM2:                &outdoorPM2,
+			PM10:               &outdoorPM10,
+			AirQualityCategory: "poor",
+		},
+		defaultAlertThresholds(),
+	)
+	if decision != ventilationBlocked || alert.Title != "Use indoor temperature controls" {
+		t.Fatalf("expected declared outdoor reliance to be blocked conservatively, got %#v", alert)
 	}
 }
 

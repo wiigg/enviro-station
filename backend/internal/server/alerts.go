@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"math"
 	"net/http"
+	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -57,8 +61,19 @@ const (
 	criticalTemperatureHighThreshold = 30.0
 	alertMessageMaxLength            = 320
 	secondsPerMinute                 = int64(60)
-	defaultInsightsDailyRequestLimit = 8
+	defaultInsightsDailyRequestLimit = 48
 	insightsMaxOutputTokens          = 1200
+)
+
+const locationCoordinateNumberPattern = `[+-]?[0-9]{1,3}\.[0-9]{2,}`
+
+var (
+	errGeneratedAlertPrivacyCheck = errors.New("generated alert failed privacy checks")
+	ukPostcodePattern             = regexp.MustCompile(`(?i)\b(GIR[[:space:]]*0AA|([A-PR-UWYZ][0-9][0-9A-HJKSTUW]?|[A-PR-UWYZ][A-HK-Y][0-9][0-9ABEHMNPRV-Y]?)[[:space:]]*[0-9][ABD-HJLNP-UW-Z]{2})\b`)
+	bareCoordinatePairPattern     = regexp.MustCompile(`(` + locationCoordinateNumberPattern + `)[[:space:]]*[,;/][[:space:]]*(` + locationCoordinateNumberPattern + `)`)
+	latitudeLongitudePattern      = regexp.MustCompile(`(?i)\b(latitude|lat)\b[^0-9+\-]{0,16}(` + locationCoordinateNumberPattern + `)[^0-9+\-]{0,32}\b(longitude|long|lon|lng)\b[^0-9+\-]{0,16}(` + locationCoordinateNumberPattern + `)`)
+	longitudeLatitudePattern      = regexp.MustCompile(`(?i)\b(longitude|long|lon|lng)\b[^0-9+\-]{0,16}(` + locationCoordinateNumberPattern + `)[^0-9+\-]{0,32}\b(latitude|lat)\b[^0-9+\-]{0,16}(` + locationCoordinateNumberPattern + `)`)
+	compassCoordinatePairPattern  = regexp.MustCompile(`(?i)(` + locationCoordinateNumberPattern + `)[[:space:]°]*(N|S)\b[[:space:]]*[,;/]?[[:space:]]*(` + locationCoordinateNumberPattern + `)[[:space:]°]*(E|W)\b`)
 )
 
 func defaultAlertThresholds() AlertThresholds {
@@ -140,7 +155,7 @@ func (analyzer *dailyLimitedAlertAnalyzer) Analyze(
 		return alerts, err
 	}
 	if analyzer.budget.markExhaustionLogged() {
-		log.Printf("ai insight daily request limit reached; using deterministic insights")
+		log.Printf("insights model daily request limit reached; using deterministic insights")
 	}
 	analyzer.setSource("rules")
 	return fallbackAlerts(buildAlertSummary(readings), analyzer.maxAlerts, analyzer.thresholds), nil
@@ -379,7 +394,7 @@ func (analyzer *openAIAlertAnalyzer) Analyze(
 	}
 
 	if response.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("openai status %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("openai status %d", response.StatusCode)
 	}
 
 	var modelResponse responsesAPIResponse
@@ -407,11 +422,31 @@ func (analyzer *openAIAlertAnalyzer) Analyze(
 			return nil, fmt.Errorf("invalid alert payload: %w", retryErr)
 		}
 	}
+	if alertsContainPrivateLocation(envelope.Alerts) {
+		return nil, errGeneratedAlertPrivacyCheck
+	}
 
 	alerts := normalizeAlerts(envelope.Alerts, analyzer.maxAlerts, summary, analyzer.thresholds)
 	for index := range alerts {
+		ventilationDecision := enforceOutdoorVentilationSafety(
+			&alerts[index],
+			summary,
+			outdoorConditions,
+			analyzer.thresholds,
+		)
 		if hasOutdoorConditions && alerts[index].UsesOutdoorContext {
-			alerts[index].Sources = cloneAlertSources(outdoorConditions.Sources)
+			if ventilationDecision != ventilationNotApplicable {
+				alerts[index].Sources = mergeAlertSources(
+					outdoorConditions.TemperatureSources,
+					outdoorConditions.AirQualitySources,
+					outdoorConditions.Sources,
+				)
+			} else {
+				alerts[index].Sources = outdoorSourcesForTopic(outdoorConditions, alerts[index].Topic)
+			}
+			if len(alerts[index].Sources) == 0 {
+				alerts[index].UsesOutdoorContext = false
+			}
 		} else {
 			alerts[index].UsesOutdoorContext = false
 			alerts[index].Sources = nil
@@ -428,6 +463,323 @@ func (analyzer *openAIAlertAnalyzer) Analyze(
 	return alerts, nil
 }
 
+func alertsContainPrivateLocation(alerts []Alert) bool {
+	for _, alert := range alerts {
+		if containsPrivateLocation(strings.Join([]string{
+			alert.Topic,
+			alert.Kind,
+			alert.Severity,
+			alert.Title,
+			alert.Message,
+		}, " ")) {
+			return true
+		}
+		for _, source := range alert.Sources {
+			if containsPrivateLocation(source.Title + " " + source.URL) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func containsPrivateLocation(text string) bool {
+	if containsPrivateLocationPlainText(text) {
+		return true
+	}
+	decoded, err := url.QueryUnescape(text)
+	return err == nil && decoded != text && containsPrivateLocationPlainText(decoded)
+}
+
+func containsPrivateLocationPlainText(text string) bool {
+	if ukPostcodePattern.MatchString(text) {
+		return true
+	}
+	for _, match := range bareCoordinatePairPattern.FindAllStringSubmatch(text, -1) {
+		if isLatitudeLongitudePair(match[1], match[2]) || isLatitudeLongitudePair(match[2], match[1]) {
+			return true
+		}
+	}
+	for _, match := range latitudeLongitudePattern.FindAllStringSubmatch(text, -1) {
+		if isLatitudeLongitudePair(match[2], match[4]) {
+			return true
+		}
+	}
+	for _, match := range longitudeLatitudePattern.FindAllStringSubmatch(text, -1) {
+		if isLatitudeLongitudePair(match[4], match[2]) {
+			return true
+		}
+	}
+	for _, match := range compassCoordinatePairPattern.FindAllStringSubmatch(text, -1) {
+		if isLatitudeLongitudePair(match[1], match[3]) {
+			return true
+		}
+	}
+	return false
+}
+
+func isLatitudeLongitudePair(latitudeText string, longitudeText string) bool {
+	latitude, latitudeErr := strconv.ParseFloat(latitudeText, 64)
+	longitude, longitudeErr := strconv.ParseFloat(longitudeText, 64)
+	return latitudeErr == nil && longitudeErr == nil &&
+		math.Abs(latitude) <= 90 && math.Abs(longitude) <= 180
+}
+
+type ventilationSafetyDecision uint8
+
+const (
+	ventilationNotApplicable ventilationSafetyDecision = iota
+	ventilationAllowed
+	ventilationBlocked
+)
+
+func enforceOutdoorVentilationSafety(
+	alert *Alert,
+	summary alertSummary,
+	conditions OutdoorConditions,
+	thresholds AlertThresholds,
+) ventilationSafetyDecision {
+	if alert == nil {
+		return ventilationNotApplicable
+	}
+	recommendsOutdoorAir := recommendsOpeningWindows(alert.Title + " " + alert.Message)
+	if !recommendsOutdoorAir && !alert.UsesOutdoorContext {
+		return ventilationNotApplicable
+	}
+	if (alert.Topic == "air_quality" || alert.Topic == "temperature") &&
+		outdoorAirSupportsVentilation(summary, conditions) &&
+		outdoorTemperatureSupportsVentilation(summary, conditions, thresholds) {
+		alert.UsesOutdoorContext = true
+		return ventilationAllowed
+	}
+
+	alert.UsesOutdoorContext = true
+	switch alert.Topic {
+	case "air_quality":
+		alert.Title = "Keep windows closed"
+		alert.Message = "Keep windows closed. Reduce indoor particle sources or use filtration while levels settle."
+	case "temperature":
+		alert.Title = "Use indoor temperature controls"
+		alert.Message = "Keep windows closed. Use heating, cooling, or fans while conditions settle."
+	default:
+		alert.UsesOutdoorContext = false
+		alert.Title = "Use indoor controls"
+		alert.Message = "Use indoor controls and keep monitoring; the available data does not support ventilation."
+	}
+	alert.Message = trimToLength(alert.Message, alertMessageMaxLength)
+	return ventilationBlocked
+}
+
+func recommendsOpeningWindows(message string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(message))
+	for _, safePhrase := range []string{
+		"avoid opening",
+		"do not open",
+		"don't open",
+		"never open",
+		"do not use",
+		"don't use",
+		"never use",
+		"avoid using",
+		"do not bring",
+		"don't bring",
+		"never bring",
+		"avoid bringing",
+		"do not draw",
+		"don't draw",
+		"never draw",
+		"do not pull",
+		"don't pull",
+		"never pull",
+		"do not let",
+		"don't let",
+		"never let",
+		"avoid ventilat",
+		"do not ventilat",
+		"don't ventilat",
+		"never ventilat",
+		"avoid natural ventilation",
+		"avoid outdoor ventilation",
+		"do not run ventilation",
+		"don't run ventilation",
+		"avoid running ventilation",
+		"keep ventilation off",
+		"ventilation is not recommended",
+		"does not support ventilation",
+		"keep the window closed",
+		"keep the windows closed",
+		"keep window closed",
+		"keep windows closed",
+		"keep the window shut",
+		"keep the windows shut",
+		"keep window shut",
+		"keep windows shut",
+		"window closed",
+		"windows closed",
+		"door closed",
+		"doors closed",
+		"window remains closed",
+		"windows remain closed",
+		"door remains closed",
+		"doors remain closed",
+		"window shut",
+		"windows shut",
+		"door shut",
+		"doors shut",
+		"keep the outside-air intake off",
+		"keep the outdoor-air intake off",
+		"keep the fresh-air intake off",
+		"outside-air intake is closed",
+		"outdoor-air intake is closed",
+		"fresh-air intake is closed",
+	} {
+		normalized = strings.ReplaceAll(normalized, safePhrase, "")
+	}
+	outdoorAirNamed := strings.Contains(normalized, "outside air") ||
+		strings.Contains(normalized, "outside-air") ||
+		strings.Contains(normalized, "outdoor air") ||
+		strings.Contains(normalized, "outdoor-air") ||
+		strings.Contains(normalized, "fresh air") ||
+		strings.Contains(normalized, "fresh-air")
+	outdoorExchangeAction := containsAnyWord(normalized,
+		"open", "opened", "opening", "leave", "leaving", "crack", "cracking", "raise", "raising", "lift", "lifting",
+		"bring", "bringing", "let", "letting", "draw", "drawing", "pull", "pulling",
+		"flush", "flushing", "exchange", "exchanging", "switch", "switching", "run",
+		"running", "increase", "increasing", "maximise", "maximising", "maximize",
+		"maximizing", "activate", "activating", "enable", "enabling", "turn", "turning",
+		"allow", "allowing", "admit", "admitting",
+	) ||
+		strings.Contains(normalized, "ventilat")
+	if outdoorAirNamed && outdoorExchangeAction {
+		return true
+	}
+	for _, indoorPhrase := range []string{
+		"filtered mechanical ventilation",
+		"filtered ventilation",
+		"recirculating ventilation",
+		"recirculation ventilation",
+		"extractor fan",
+		"recirculating fan",
+		"recirculation fan",
+		"use fans to increase airflow",
+		"use a fan to increase airflow",
+		"increase indoor airflow",
+		"improve indoor airflow",
+	} {
+		normalized = strings.ReplaceAll(normalized, indoorPhrase, "")
+	}
+	for _, recommendation := range []string{
+		"open a window",
+		"open the window",
+		"open windows",
+		"open the windows",
+		"opening a window",
+		"opening the window",
+		"opening windows",
+		"opening the windows",
+		"increase ventilation",
+		"improve ventilation",
+		"brief ventilation",
+		"ventilate the room",
+		"natural ventilation",
+		"air out the room",
+		"air the room out",
+		"air out the home",
+		"air out your home",
+		"air the home out",
+		"air your home out",
+		"let fresh air in",
+		"bring fresh air in",
+		"bring outside air in",
+		"bring outdoor air in",
+		"cross-breeze",
+		"cross breeze",
+		"vent the room",
+		"vent your room",
+		"vent the home",
+		"vent your home",
+	} {
+		if strings.Contains(normalized, recommendation) {
+			return true
+		}
+	}
+	if strings.Contains(normalized, "ventilat") {
+		return true
+	}
+	outdoorOpening := containsAnyWord(normalized,
+		"open", "opened", "opening", "leave", "leaving", "crack", "cracking", "ajar", "raise", "raising", "lift",
+		"lifting", "flush", "flushing", "draw", "drawing", "exchange", "exchanging",
+		"switch", "switching", "run", "running", "activate", "activating", "enable",
+		"enabling", "turn", "turning", "allow", "allowing", "admit", "admitting",
+	)
+	outdoorOpeningObject := containsAnyWord(normalized,
+		"window", "windows", "sash", "sashes", "door", "doors", "vent", "vents",
+		"intake", "intakes", "supply", "supplies",
+	)
+	if outdoorOpening && outdoorOpeningObject {
+		return true
+	}
+	return false
+}
+
+func containsAnyWord(text string, words ...string) bool {
+	wanted := make(map[string]struct{}, len(words))
+	for _, word := range words {
+		wanted[word] = struct{}{}
+	}
+	for _, word := range strings.FieldsFunc(text, func(character rune) bool {
+		return !unicode.IsLetter(character) && !unicode.IsDigit(character)
+	}) {
+		if _, ok := wanted[word]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func outdoorAirSupportsVentilation(summary alertSummary, conditions OutdoorConditions) bool {
+	switch conditions.AirQualityCategory {
+	case "poor", "very_poor", "extremely_poor":
+		return false
+	}
+
+	if summary.ParticulateAvailable {
+		if conditions.PM2 == nil || conditions.PM10 == nil {
+			return false
+		}
+		if *conditions.PM2 >= summary.Latest.PM2 || *conditions.PM10 >= summary.Latest.PM10 {
+			return false
+		}
+		return true
+	}
+	return conditions.AirQualityCategory == "good" || conditions.AirQualityCategory == "fair"
+}
+
+func outdoorTemperatureSupportsVentilation(
+	summary alertSummary,
+	conditions OutdoorConditions,
+	thresholds AlertThresholds,
+) bool {
+	if conditions.TemperatureC == nil {
+		return false
+	}
+	indoor := summary.Latest.Temperature
+	outdoor := *conditions.TemperatureC
+	if comfortDistance(outdoor, thresholds.TemperatureLowThreshold, thresholds.TemperatureHighThreshold) >
+		comfortDistance(indoor, thresholds.TemperatureLowThreshold, thresholds.TemperatureHighThreshold) {
+		return false
+	}
+	switch {
+	case indoor < thresholds.TemperatureLowThreshold:
+		return outdoor > indoor
+	case indoor >= thresholds.TemperatureHighThreshold:
+		return outdoor < indoor
+	default:
+		return outdoor >= thresholds.TemperatureLowThreshold &&
+			outdoor < thresholds.TemperatureHighThreshold
+	}
+}
+
 func systemPrompt(maxAlerts int, thresholds AlertThresholds) string {
 	topics := focusedAlertTopics()
 	return fmt.Sprintf(
@@ -437,7 +789,7 @@ func systemPrompt(maxAlerts int, thresholds AlertThresholds) string {
 			"Otherwise return only the noteworthy topics and omit stable ones. "+
 			"Each non-general alert must focus on one topic only and must not bundle unrelated metrics. "+
 			"When particulate_available is false, do not discuss, infer, or generate alerts from PM values because they are unavailable. "+
-			"When an outdoor object is provided, use it only in an air_quality insight when current outdoor particulate values or air-quality category changes ventilation advice, or in a temperature insight when outdoor temperature changes whether opening windows would move the room toward the 18-26C comfort range. Never use outdoor context for humidity, merely mention the weather, or make a comparison unsupported by available outdoor fields. Never recommend opening windows when outdoor particulate conditions are worse or when outdoor temperature would move the room farther from comfort. "+
+			"When an outdoor object is provided, use it only in an air_quality insight when current outdoor particulate values or air-quality category changes ventilation advice, or in a temperature insight when outdoor temperature changes whether bringing outdoor air inside would move the room toward the 18-26C comfort range. Never use outdoor context for humidity, merely mention the weather, or make a comparison unsupported by available outdoor fields. Never recommend opening windows, doors, vents, or otherwise bringing outdoor air inside when outdoor particulate conditions are worse or when outdoor temperature would move the room farther from comfort. "+
 			"If outdoor context does not change the recommended action, ignore it. "+
 			"Never mention or infer a postcode, address, town, coordinates, or station location. Set uses_outdoor_context true only when the insight materially relies on the outdoor object; otherwise set it false. "+
 			"For air_quality discuss PM2.5 and PM10 only, treating PM2.5 at or above %.1f ug/m3, PM10 at or above %.1f ug/m3, or 10 minute moves of %.1f/%.1f ug/m3 as noteworthy. "+

@@ -82,12 +82,12 @@ func main() {
 		insightsBaseURL := envOrDefault("OPENAI_BASE_URL", "https://api.openai.com/v1")
 		insightsMax := intOrDefault("OPENAI_INSIGHTS_MAX", 3)
 		insightsAnalysisLimit := intOrDefault("OPENAI_INSIGHTS_ANALYSIS_LIMIT", 900)
-		insightsRefreshInterval := durationOrDefault("OPENAI_INSIGHTS_REFRESH_INTERVAL", 12*time.Hour)
+		insightsRefreshInterval := durationOrDefault("OPENAI_INSIGHTS_REFRESH_INTERVAL", time.Hour)
 		insightsEventMinInterval := durationOrDefault(
 			"OPENAI_INSIGHTS_EVENT_MIN_INTERVAL",
 			30*time.Minute,
 		)
-		insightsDailyLimit := intOrDefault("OPENAI_INSIGHTS_DAILY_LIMIT", 8)
+		insightsDailyLimit := intOrDefault("OPENAI_INSIGHTS_DAILY_LIMIT", 48)
 		insightsPM2Trigger := floatOrDefault("OPENAI_INSIGHTS_PM2_TRIGGER", 8.0)
 		insightsPM10Trigger := floatOrDefault("OPENAI_INSIGHTS_PM10_TRIGGER", 30.0)
 		insightsPM2DeltaTrigger := floatOrDefault("OPENAI_INSIGHTS_PM2_DELTA_TRIGGER", 5.0)
@@ -115,16 +115,12 @@ func main() {
 		}
 		var alertAnalyzer server.AlertAnalyzer
 		if outdoorLocation != "" {
-			outdoorProvider := server.NewOpenAIOutdoorProvider(server.OutdoorSearchConfig{
-				APIKey:          openAIAPIKey,
-				Model:           envOrDefault("OPENAI_OUTDOOR_MODEL", insightsModel),
-				ReasoningEffort: envOrDefault("OPENAI_OUTDOOR_REASONING_EFFORT", insightsReasoningEffort),
-				BaseURL:         insightsBaseURL,
+			outdoorRefreshInterval := durationOrDefault("OUTDOOR_REFRESH_INTERVAL", 2*time.Hour)
+			outdoorProvider := server.NewOpenMeteoOutdoorProvider(server.OutdoorProviderConfig{
 				Location:        outdoorLocation,
-				RefreshInterval: durationOrDefault("OPENAI_OUTDOOR_REFRESH_INTERVAL", 2*time.Hour),
-				MaxAge:          durationOrDefault("OPENAI_OUTDOOR_MAX_AGE", 90*time.Minute),
-				RequestTimeout:  durationOrDefault("OPENAI_OUTDOOR_REQUEST_TIMEOUT", 20*time.Second),
-				DailyLimit:      intOrDefault("OPENAI_OUTDOOR_DAILY_LIMIT", 12),
+				RefreshInterval: outdoorRefreshInterval,
+				MaxAge:          durationOrDefault("OUTDOOR_MAX_AGE", 3*time.Hour),
+				RequestTimeout:  durationOrDefault("OUTDOOR_REQUEST_TIMEOUT", 20*time.Second),
 			})
 			alertAnalyzer = server.NewOpenAIAlertAnalyzerWithOutdoor(
 				openAIAPIKey,
@@ -136,7 +132,7 @@ func main() {
 				outdoorProvider,
 			)
 			options = append(options, server.WithOutdoorContext(outdoorProvider))
-			log.Printf("outdoor context enabled refresh_interval=%s", durationOrDefault("OPENAI_OUTDOOR_REFRESH_INTERVAL", 2*time.Hour))
+			log.Printf("outdoor context enabled provider=open-meteo refresh_interval=%s", outdoorRefreshInterval)
 		} else {
 			alertAnalyzer = server.NewOpenAIAlertAnalyzer(
 				openAIAPIKey,
@@ -174,14 +170,14 @@ func main() {
 			}),
 		)
 		log.Printf(
-			"ai insights enabled model=%s reasoning_effort=%s analysis_limit=%d refresh_interval=%s",
+			"insights enabled model=%s reasoning_effort=%s analysis_limit=%d refresh_interval=%s",
 			insightsModel,
 			insightsReasoningEffort,
 			insightsAnalysisLimit,
 			insightsRefreshInterval,
 		)
 	} else {
-		log.Printf("ai insights disabled (set OPENAI_API_KEY to enable)")
+		log.Printf("insights disabled (set OPENAI_API_KEY to enable)")
 	}
 
 	api := server.NewAPI(store, ingestAPIKey, options...)

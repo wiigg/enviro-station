@@ -1095,6 +1095,31 @@ func TestHandleAlertsReturnsAnalyzedAlerts(t *testing.T) {
 	}
 }
 
+func TestHandleInsightsRejectsPrivateLocationData(t *testing.T) {
+	privatePostcode := strings.Join([]string{"A", "A", "1", " ", "1", "A", "A"}, "")
+	engine := &fakeInsightsEngine{
+		ready: true,
+		snapshot: InsightsSnapshot{Insights: []Alert{{
+			Kind:     "insight",
+			Severity: "info",
+			Title:    "Local conditions",
+			Message:  "Outdoor context near " + privatePostcode + ".",
+		}}},
+	}
+	api := NewAPI(&fakeStore{}, "secret", WithInsightsEngine(engine))
+	request := httptest.NewRequest(http.MethodGet, "/api/insights", nil)
+	response := httptest.NewRecorder()
+
+	api.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status %d, got %d", http.StatusServiceUnavailable, response.Code)
+	}
+	if strings.Contains(response.Body.String(), privatePostcode) {
+		t.Fatal("public insights response exposed private location data")
+	}
+}
+
 func TestHandleInsightsDefaultsToThreeItems(t *testing.T) {
 	store := &fakeStore{}
 	engine := &fakeInsightsEngine{

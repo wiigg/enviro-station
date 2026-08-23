@@ -23,5 +23,6 @@
 **/dist/
 **/.vite/
 **/fly.toml
+/outputs/
 .DS_Store
 venv

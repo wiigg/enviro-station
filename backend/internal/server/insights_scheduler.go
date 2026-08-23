@@ -36,6 +36,7 @@ const (
 	insightsAnalysisSourceLive    insightsAnalysisSource = "live"
 	insightsTrendWindow                                  = 10 * time.Minute
 	insightsScheduleCheckInterval                        = 5 * time.Minute
+	insightsScheduleRetryInterval                        = 30 * time.Minute
 )
 
 type InsightsSchedulerOption func(*InsightsScheduler)
@@ -72,7 +73,7 @@ type InsightsSchedulerConfig struct {
 func DefaultInsightsSchedulerConfig() InsightsSchedulerConfig {
 	return InsightsSchedulerConfig{
 		AnalysisLimit:            900,
-		RefreshInterval:          12 * time.Hour,
+		RefreshInterval:          time.Hour,
 		EventMinInterval:         30 * time.Minute,
 		PM2Threshold:             8.0,
 		PM10Threshold:            30.0,
@@ -96,16 +97,24 @@ type InsightsScheduler struct {
 	liveReadings   func(limit int) []SensorReading
 	outdoorContext OutdoorContextSource
 
-	mu                   sync.RWMutex
-	snapshot             InsightsSnapshot
-	hasSnapshot          bool
-	lastReading          *SensorReading
-	recentReadings       []SensorReading
-	lastAnalyzedSampleAt int64
-	lastEventTrigger     time.Time
-	lastEventDirection   string
-	running              bool
-	pendingTrigger       string
+	mu                             sync.RWMutex
+	snapshot                       InsightsSnapshot
+	hasSnapshot                    bool
+	lastReading                    *SensorReading
+	recentReadings                 []SensorReading
+	lastAnalyzedSampleAt           int64
+	reportedSeverity               *insightsSeverityState
+	acceptedSeverity               *insightsSeverityState
+	acceptedSeverityAt             int64
+	acceptedDeviceID               string
+	acceptedGeneration             uint64
+	acceptedFailed                 bool
+	eventGeneration                uint64
+	lastEventTrigger               time.Time
+	lastIntervalAttempt            time.Time
+	lastScheduledAttemptedSampleAt int64
+	running                        bool
+	pendingTrigger                 string
 }
 
 func NewInsightsScheduler(
@@ -183,7 +192,11 @@ func (scheduler *InsightsScheduler) Start(ctx context.Context) {
 		scheduler.requestRecompute("startup")
 	}
 	if monitor, ok := scheduler.outdoorContext.(OutdoorContextMonitor); ok {
-		monitor.Start(ctx, func() {
+		monitor.Start(ctx, func(initial bool) {
+			if initial {
+				scheduler.requestRecompute("outdoor_initial")
+				return
+			}
 			scheduler.requestRecompute("outdoor")
 		})
 	}
@@ -213,12 +226,16 @@ func (scheduler *InsightsScheduler) needsScheduledRefresh(now time.Time) bool {
 	scheduler.mu.RLock()
 	defer scheduler.mu.RUnlock()
 
-	if !scheduler.hasSnapshot || scheduler.snapshot.GeneratedAt <= 0 {
-		return true
+	due := !scheduler.hasSnapshot || scheduler.snapshot.GeneratedAt <= 0
+	if !due {
+		generatedAt := time.UnixMilli(scheduler.snapshot.GeneratedAt)
+		due = !now.Before(generatedAt.Add(scheduler.config.RefreshInterval))
 	}
-
-	generatedAt := time.UnixMilli(scheduler.snapshot.GeneratedAt)
-	return !now.Before(generatedAt.Add(scheduler.config.RefreshInterval))
+	if !due {
+		return false
+	}
+	return scheduler.lastIntervalAttempt.IsZero() ||
+		!now.Before(scheduler.lastIntervalAttempt.Add(insightsScheduleRetryInterval))
 }
 
 func (scheduler *InsightsScheduler) loadSnapshotFromStore() {
@@ -240,6 +257,10 @@ func (scheduler *InsightsScheduler) loadSnapshotFromStore() {
 	if !ok {
 		return
 	}
+	if insightsSnapshotContainsPrivateLocation(snapshot) {
+		log.Printf("insights snapshot rejected by privacy checks")
+		return
+	}
 
 	scheduler.mu.Lock()
 	scheduler.snapshot = snapshot
@@ -247,8 +268,7 @@ func (scheduler *InsightsScheduler) loadSnapshotFromStore() {
 	scheduler.mu.Unlock()
 
 	log.Printf(
-		"insights snapshot restored source=%s generated_at=%d",
-		snapshot.Source,
+		"insights snapshot restored generated_at=%d",
 		snapshot.GeneratedAt,
 	)
 }
@@ -263,12 +283,20 @@ func (scheduler *InsightsScheduler) Snapshot(limit int) (InsightsSnapshot, bool)
 
 	snapshot := scheduler.snapshot
 	snapshot.Insights = cloneAlerts(snapshot.Insights)
+	if insightsSnapshotContainsPrivateLocation(snapshot) {
+		return InsightsSnapshot{}, false
+	}
 
 	if limit > 0 && len(snapshot.Insights) > limit {
 		snapshot.Insights = snapshot.Insights[:limit]
 	}
 
 	return snapshot, true
+}
+
+func insightsSnapshotContainsPrivateLocation(snapshot InsightsSnapshot) bool {
+	return containsPrivateLocation(snapshot.Source+" "+snapshot.Trigger) ||
+		alertsContainPrivateLocation(snapshot.Insights)
 }
 
 func (scheduler *InsightsScheduler) OnReading(reading SensorReading) {
@@ -302,15 +330,10 @@ func (scheduler *InsightsScheduler) triggerFromReading(reading SensorReading) st
 		latest := reading
 		scheduler.lastReading = &latest
 		scheduler.recentReadings = []SensorReading{reading}
-		if !scheduler.hasSnapshot {
-			return "warmup"
-		}
-		if scheduler.outdoorContext != nil {
-			if _, ok := scheduler.outdoorContext.Snapshot(); ok {
-				return "outdoor"
-			}
-		}
-		return ""
+		severity := scheduler.severityState(reading)
+		scheduler.reportedSeverity = &severity
+		scheduler.clearAcceptedSeverityLocked()
+		return "warmup"
 	}
 
 	previous := *scheduler.lastReading
@@ -318,6 +341,9 @@ func (scheduler *InsightsScheduler) triggerFromReading(reading SensorReading) st
 		latest := reading
 		scheduler.lastReading = &latest
 		scheduler.recentReadings = []SensorReading{reading}
+		severity := scheduler.severityState(reading)
+		scheduler.reportedSeverity = &severity
+		scheduler.clearAcceptedSeverityLocked()
 		return ""
 	}
 	if reading.Timestamp <= previous.Timestamp {
@@ -327,22 +353,41 @@ func (scheduler *InsightsScheduler) triggerFromReading(reading SensorReading) st
 	latest := reading
 	scheduler.lastReading = &latest
 	windowReference := scheduler.recordRecentReading(reading)
+	currentSeverity := scheduler.severityState(reading)
 
-	previousPMAvailable := particulateAvailable(previous)
-	currentPMAvailable := particulateAvailable(reading)
-	pmAvailabilityChanged := previousPMAvailable != currentPMAvailable
+	reportedSeverity := scheduler.severityState(previous)
+	if scheduler.reportedSeverity != nil {
+		reportedSeverity = *scheduler.reportedSeverity
+	}
+	retryFailedEvent := false
+	if scheduler.acceptedSeverity != nil {
+		cooldownExpired := scheduler.lastEventTrigger.IsZero() ||
+			now.Sub(scheduler.lastEventTrigger) >= scheduler.config.EventMinInterval
+		if scheduler.acceptedFailed && cooldownExpired {
+			scheduler.clearAcceptedSeverityLocked()
+			retryFailedEvent = true
+		} else {
+			reportedSeverity = *scheduler.acceptedSeverity
+		}
+	}
+	if retryFailedEvent {
+		scheduler.acceptEventLocked(currentSeverity, reading, now)
+		return "event"
+	}
+	previousPMAvailable := reportedSeverity.pmAvailable
+	currentPMAvailable := currentSeverity.pmAvailable
 	pm2Delta := 0.0
 	pm10Delta := 0.0
 	pm2SeverityChange := 0
 	pm10SeverityChange := 0
 	if previousPMAvailable && currentPMAvailable {
 		pm2SeverityChange = severityChange(
-			pmSeverity(previous.PM2, scheduler.config.PM2Threshold, criticalPM2Threshold),
-			pmSeverity(reading.PM2, scheduler.config.PM2Threshold, criticalPM2Threshold),
+			reportedSeverity.pm2,
+			currentSeverity.pm2,
 		)
 		pm10SeverityChange = severityChange(
-			pmSeverity(previous.PM10, scheduler.config.PM10Threshold, criticalPM10Threshold),
-			pmSeverity(reading.PM10, scheduler.config.PM10Threshold, criticalPM10Threshold),
+			reportedSeverity.pm10,
+			currentSeverity.pm10,
 		)
 	}
 	if currentPMAvailable {
@@ -352,19 +397,13 @@ func (scheduler *InsightsScheduler) triggerFromReading(reading SensorReading) st
 		}
 	}
 	humiditySeverityChange := severityChange(
-		humiditySeverity(previous.Humidity, scheduler.config.HumidityLowThreshold, scheduler.config.HumidityHighThreshold),
-		humiditySeverity(reading.Humidity, scheduler.config.HumidityLowThreshold, scheduler.config.HumidityHighThreshold),
+		reportedSeverity.humidity,
+		currentSeverity.humidity,
 	)
 	temperatureSeverityChange := severityChange(
-		temperatureSeverity(previous.Temperature, scheduler.config.TemperatureLowThreshold, scheduler.config.TemperatureHighThreshold),
-		temperatureSeverity(reading.Temperature, scheduler.config.TemperatureLowThreshold, scheduler.config.TemperatureHighThreshold),
+		reportedSeverity.temperature,
+		currentSeverity.temperature,
 	)
-	severityChanged := pmAvailabilityChanged ||
-		pm2SeverityChange != 0 ||
-		pm10SeverityChange != 0 ||
-		humiditySeverityChange != 0 ||
-		temperatureSeverityChange != 0
-
 	worsening := (previousPMAvailable && !currentPMAvailable) ||
 		pm2SeverityChange > 0 ||
 		pm10SeverityChange > 0 ||
@@ -388,24 +427,41 @@ func (scheduler *InsightsScheduler) triggerFromReading(reading SensorReading) st
 		return ""
 	}
 
-	eventDirection := "mixed"
-	switch {
-	case worsening && !improving:
-		eventDirection = "worsening"
-	case improving && !worsening:
-		eventDirection = "improving"
+	criticalEscalation :=
+		(pm2SeverityChange > 0 && currentSeverity.pm2 == metricCritical) ||
+			(pm10SeverityChange > 0 && currentSeverity.pm10 == metricCritical) ||
+			(humiditySeverityChange > 0 && currentSeverity.humidity == metricCritical) ||
+			(temperatureSeverityChange > 0 && currentSeverity.temperature == metricCritical)
+	if !previousPMAvailable && currentPMAvailable &&
+		(currentSeverity.pm2 == metricCritical || currentSeverity.pm10 == metricCritical) {
+		criticalEscalation = true
 	}
-
-	if !severityChanged &&
+	urgentChange := (previousPMAvailable && !currentPMAvailable) || criticalEscalation
+	if !urgentChange &&
 		!scheduler.lastEventTrigger.IsZero() &&
-		now.Sub(scheduler.lastEventTrigger) < scheduler.config.EventMinInterval &&
-		scheduler.lastEventDirection == eventDirection {
+		now.Sub(scheduler.lastEventTrigger) < scheduler.config.EventMinInterval {
 		return ""
 	}
 
-	scheduler.lastEventTrigger = now
-	scheduler.lastEventDirection = eventDirection
+	scheduler.acceptEventLocked(currentSeverity, reading, now)
 	return "event"
+}
+
+func (scheduler *InsightsScheduler) acceptEventLocked(
+	severity insightsSeverityState,
+	reading SensorReading,
+	now time.Time,
+) {
+	scheduler.eventGeneration++
+	if scheduler.eventGeneration == 0 {
+		scheduler.eventGeneration++
+	}
+	scheduler.acceptedSeverity = &severity
+	scheduler.acceptedSeverityAt = reading.Timestamp
+	scheduler.acceptedDeviceID = reading.DeviceID
+	scheduler.acceptedGeneration = scheduler.eventGeneration
+	scheduler.acceptedFailed = false
+	scheduler.lastEventTrigger = now
 }
 
 func readingsFromDifferentDevices(previous, current SensorReading) bool {
@@ -444,6 +500,35 @@ const (
 	metricWarn
 	metricCritical
 )
+
+type insightsSeverityState struct {
+	pmAvailable bool
+	pm2         metricSeverity
+	pm10        metricSeverity
+	humidity    metricSeverity
+	temperature metricSeverity
+}
+
+func (scheduler *InsightsScheduler) severityState(reading SensorReading) insightsSeverityState {
+	state := insightsSeverityState{
+		pmAvailable: particulateAvailable(reading),
+		humidity: humiditySeverity(
+			reading.Humidity,
+			scheduler.config.HumidityLowThreshold,
+			scheduler.config.HumidityHighThreshold,
+		),
+		temperature: temperatureSeverity(
+			reading.Temperature,
+			scheduler.config.TemperatureLowThreshold,
+			scheduler.config.TemperatureHighThreshold,
+		),
+	}
+	if state.pmAvailable {
+		state.pm2 = pmSeverity(reading.PM2, scheduler.config.PM2Threshold, criticalPM2Threshold)
+		state.pm10 = pmSeverity(reading.PM10, scheduler.config.PM10Threshold, criticalPM10Threshold)
+	}
+	return state
+}
 
 func severityChange(previous, current metricSeverity) int {
 	return int(current) - int(previous)
@@ -500,6 +585,18 @@ func comfortDistance(value, low, high float64) float64 {
 
 func (scheduler *InsightsScheduler) requestRecompute(trigger string) {
 	scheduler.mu.Lock()
+	now := time.Now()
+	hasNewLiveReading := scheduler.lastReading != nil &&
+		scheduler.lastReading.Timestamp > scheduler.lastScheduledAttemptedSampleAt
+	if trigger == "warmup" && !scheduler.lastIntervalAttempt.IsZero() &&
+		now.Before(scheduler.lastIntervalAttempt.Add(insightsScheduleRetryInterval)) &&
+		!hasNewLiveReading {
+		scheduler.mu.Unlock()
+		return
+	}
+	if trigger == "interval" || trigger == "startup" || trigger == "warmup" {
+		scheduler.lastIntervalAttempt = now
+	}
 	if scheduler.running {
 		if scheduler.pendingTrigger == "" || triggerPriority(trigger) > triggerPriority(scheduler.pendingTrigger) {
 			scheduler.pendingTrigger = trigger
@@ -525,6 +622,11 @@ func (scheduler *InsightsScheduler) recomputeLoop(trigger string) {
 			scheduler.mu.Unlock()
 			continue
 		}
+		if scheduler.acceptedSeverity != nil && !scheduler.acceptedFailed {
+			nextTrigger = "event"
+			scheduler.mu.Unlock()
+			continue
+		}
 		scheduler.running = false
 		scheduler.mu.Unlock()
 		return
@@ -533,10 +635,10 @@ func (scheduler *InsightsScheduler) recomputeLoop(trigger string) {
 
 func triggerPriority(trigger string) int {
 	switch trigger {
+	case "outdoor", "outdoor_initial":
+		return 4
 	case "event":
 		return 3
-	case "outdoor":
-		return 2
 	case "warmup":
 		return 2
 	case "startup":
@@ -547,11 +649,19 @@ func triggerPriority(trigger string) int {
 }
 
 func (scheduler *InsightsScheduler) recompute(trigger string) {
+	eventAttemptGeneration := uint64(0)
+	if trigger == "event" {
+		scheduler.mu.RLock()
+		eventAttemptGeneration = scheduler.acceptedGeneration
+		scheduler.mu.RUnlock()
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), scheduler.config.AnalyzeTimeout)
 	defer cancel()
 
 	readings, analysisSource, err := scheduler.analysisReadings(ctx, trigger)
 	if err != nil {
+		scheduler.failEventAttempt(eventAttemptGeneration)
 		if errors.Is(err, ErrStoreUnavailable) {
 			return
 		}
@@ -559,20 +669,40 @@ func (scheduler *InsightsScheduler) recompute(trigger string) {
 		return
 	}
 	if len(readings) == 0 {
+		scheduler.failEventAttempt(eventAttemptGeneration)
 		return
 	}
 
 	latestSampleAt := latestTimestamp(readings)
-	scheduler.mu.RLock()
+	scheduler.mu.Lock()
+	if trigger == "warmup" &&
+		latestSampleAt <= scheduler.lastScheduledAttemptedSampleAt &&
+		!scheduler.lastIntervalAttempt.IsZero() &&
+		time.Now().Before(scheduler.lastIntervalAttempt.Add(insightsScheduleRetryInterval)) {
+		scheduler.mu.Unlock()
+		return
+	}
+	if trigger == "startup" || trigger == "warmup" || trigger == "interval" {
+		if latestSampleAt > scheduler.lastScheduledAttemptedSampleAt {
+			scheduler.lastScheduledAttemptedSampleAt = latestSampleAt
+		}
+	}
 	alreadyAnalyzed := scheduler.lastAnalyzedSampleAt > 0 && latestSampleAt <= scheduler.lastAnalyzedSampleAt
-	scheduler.mu.RUnlock()
-	if trigger == "interval" && alreadyAnalyzed {
+	scheduler.mu.Unlock()
+	if (trigger == "interval" || trigger == "event" || trigger == "warmup") && alreadyAnalyzed {
+		scheduler.completeEventAttempt(eventAttemptGeneration, readings[len(readings)-1])
 		return
 	}
 
 	alerts, err := scheduler.analyzer.Analyze(ctx, readings)
 	if err != nil {
+		scheduler.failEventAttempt(eventAttemptGeneration)
 		log.Printf("insights recompute failed to analyze readings: %v", err)
+		return
+	}
+	if alertsContainPrivateLocation(alerts) {
+		scheduler.failEventAttempt(eventAttemptGeneration)
+		log.Printf("insights recompute rejected by privacy checks")
 		return
 	}
 
@@ -589,18 +719,31 @@ func (scheduler *InsightsScheduler) recompute(trigger string) {
 		latest := readings[len(readings)-1]
 		latestAnalyzed = &latest
 	}
-
 	scheduler.mu.Lock()
 	scheduler.snapshot = snapshot
 	scheduler.hasSnapshot = true
 	if latestAnalyzed != nil {
-		scheduler.lastAnalyzedSampleAt = latestAnalyzed.Timestamp
-		if scheduler.lastReading == nil || latestAnalyzed.Timestamp >= scheduler.lastReading.Timestamp {
+		if latestAnalyzed.Timestamp > scheduler.lastAnalyzedSampleAt {
+			scheduler.lastAnalyzedSampleAt = latestAnalyzed.Timestamp
+		}
+		analysisMatchesCurrentDevice := scheduler.lastReading == nil ||
+			!readingsFromDifferentDevices(*scheduler.lastReading, *latestAnalyzed)
+		if analysisMatchesCurrentDevice {
+			severity := scheduler.severityState(*latestAnalyzed)
+			scheduler.reportedSeverity = &severity
+			if scheduler.acceptedSeverity != nil && scheduler.readingCoversAcceptedEvent(*latestAnalyzed) {
+				scheduler.clearAcceptedSeverityLocked()
+			}
+		}
+		analysisIsCurrent := analysisMatchesCurrentDevice && (scheduler.lastReading == nil ||
+			latestAnalyzed.Timestamp >= scheduler.lastReading.Timestamp)
+		if analysisIsCurrent {
 			scheduler.lastReading = latestAnalyzed
 			scheduler.recentReadings = []SensorReading{*latestAnalyzed}
 		}
 	}
 	scheduler.mu.Unlock()
+	scheduler.failEventAttempt(eventAttemptGeneration)
 
 	if scheduler.snapshotStore != nil && analysisSource != insightsAnalysisSourceLive {
 		saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -617,6 +760,51 @@ func (scheduler *InsightsScheduler) recompute(trigger string) {
 		len(readings),
 		len(alerts),
 	)
+}
+
+func (scheduler *InsightsScheduler) failEventAttempt(generation uint64) {
+	if generation == 0 {
+		return
+	}
+	scheduler.mu.Lock()
+	if scheduler.acceptedGeneration == generation {
+		scheduler.acceptedFailed = true
+	}
+	scheduler.mu.Unlock()
+}
+
+func (scheduler *InsightsScheduler) completeEventAttempt(
+	generation uint64,
+	latestAnalyzed SensorReading,
+) {
+	if generation == 0 {
+		return
+	}
+	scheduler.mu.Lock()
+	if scheduler.acceptedGeneration == generation {
+		if scheduler.readingCoversAcceptedEvent(latestAnalyzed) {
+			scheduler.clearAcceptedSeverityLocked()
+		} else {
+			scheduler.acceptedFailed = true
+		}
+	}
+	scheduler.mu.Unlock()
+}
+
+func (scheduler *InsightsScheduler) readingCoversAcceptedEvent(reading SensorReading) bool {
+	if reading.Timestamp < scheduler.acceptedSeverityAt {
+		return false
+	}
+	return scheduler.acceptedDeviceID == "" || reading.DeviceID == "" ||
+		reading.DeviceID == scheduler.acceptedDeviceID
+}
+
+func (scheduler *InsightsScheduler) clearAcceptedSeverityLocked() {
+	scheduler.acceptedSeverity = nil
+	scheduler.acceptedSeverityAt = 0
+	scheduler.acceptedDeviceID = ""
+	scheduler.acceptedGeneration = 0
+	scheduler.acceptedFailed = false
 }
 
 func (scheduler *InsightsScheduler) analysisReadings(
@@ -636,7 +824,7 @@ func (scheduler *InsightsScheduler) analysisReadings(
 		}
 		return nil, insightsAnalysisSourceDurable, ErrStoreUnavailable
 	}
-	if (trigger == "event" || trigger == "warmup" || trigger == "outdoor") && len(liveReadings) > 0 {
+	if (trigger == "event" || trigger == "warmup" || trigger == "outdoor" || trigger == "outdoor_initial") && len(liveReadings) > 0 {
 		return liveReadings, insightsAnalysisSourceLive, nil
 	}
 

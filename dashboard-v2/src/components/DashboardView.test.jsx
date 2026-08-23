@@ -79,6 +79,7 @@ describe("DashboardView", () => {
     );
     expect(screen.getByText(/Last reading/)).toBeInTheDocument();
     expect(screen.getByText("Enviro Station · Office")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Insights" })).toBeInTheDocument();
     expect(screen.getByText("Diagnostics").closest("details")).not.toHaveAttribute("open");
   });
 

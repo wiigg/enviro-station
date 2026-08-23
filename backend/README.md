@@ -1,6 +1,6 @@
 # Backend Ingest Service
 
-Go service for Enviro Station ingest, storage, streaming, and AI insights.
+Go service for Enviro Station ingest, storage, streaming, and insights.
 Ingest endpoints require `INGEST_API_KEY`; read endpoints are optionally protected
 with `READ_API_KEY` and rate-limited by client IP by default.
 
@@ -62,9 +62,9 @@ Range mode notes:
 - `OPENAI_BASE_URL` (default: `https://api.openai.com/v1`)
 - `OPENAI_INSIGHTS_MAX` (default: `3`; hard-capped at `3`)
 - `OPENAI_INSIGHTS_ANALYSIS_LIMIT` (default: `900`)
-- `OPENAI_INSIGHTS_REFRESH_INTERVAL` (default: `12h`; maximum age before a scheduled refresh)
-- `OPENAI_INSIGHTS_EVENT_MIN_INTERVAL` (default: `30m`; threshold crossings still refresh immediately)
-- `OPENAI_INSIGHTS_DAILY_LIMIT` (default: `8`; deterministic insights continue after the OpenAI limit)
+- `OPENAI_INSIGHTS_REFRESH_INTERVAL` (default: `1h`; maximum age before a scheduled refresh)
+- `OPENAI_INSIGHTS_EVENT_MIN_INTERVAL` (default: `30m`; coalesces warning-boundary chatter while critical escalations and particle-sensor loss still refresh immediately)
+- `OPENAI_INSIGHTS_DAILY_LIMIT` (default: `48`; per-process UTC-day ceiling with headroom for hourly and event-triggered model calls, then deterministic insights continue)
 - `OPENAI_INSIGHTS_PM2_TRIGGER` (default: `8`)
 - `OPENAI_INSIGHTS_PM10_TRIGGER` (default: `30`)
 - `OPENAI_INSIGHTS_PM2_DELTA_TRIGGER` (default: `5`; 10 minute material-change threshold)
@@ -75,14 +75,11 @@ Range mode notes:
 - `OPENAI_INSIGHTS_TEMPERATURE_LOW_TRIGGER` (default: `18`)
 - `OPENAI_INSIGHTS_TEMPERATURE_HIGH_TRIGGER` (default: `26`)
 - `OPENAI_INSIGHTS_TEMPERATURE_DELTA_TRIGGER` (default: `1.5`; 10 minute material-change threshold)
-- `OPENAI_INSIGHTS_ANALYZE_TIMEOUT` (default: `40s`; covers an optional cache-miss outdoor search plus insight generation)
+- `OPENAI_INSIGHTS_ANALYZE_TIMEOUT` (default: `40s`; covers an optional cache-miss outdoor API refresh plus insight generation)
 - `OUTDOOR_LOCATION` (optional backend-only secret; enables outdoor weather and air-quality context, e.g. a UK postcode)
-- `OPENAI_OUTDOOR_MODEL` (default: `OPENAI_INSIGHTS_MODEL`)
-- `OPENAI_OUTDOOR_REASONING_EFFORT` (default: `OPENAI_INSIGHTS_REASONING_EFFORT`)
-- `OPENAI_OUTDOOR_REFRESH_INTERVAL` (default: `2h`)
-- `OPENAI_OUTDOOR_MAX_AGE` (default: `90m`; older context is excluded from insights)
-- `OPENAI_OUTDOOR_REQUEST_TIMEOUT` (default: `20s`)
-- `OPENAI_OUTDOOR_DAILY_LIMIT` (default: `12`; includes scheduled and on-demand searches)
+- `OUTDOOR_REFRESH_INTERVAL` (default: `2h`)
+- `OUTDOOR_MAX_AGE` (default: `3h`; older context is excluded from insights and is always kept beyond the refresh interval)
+- `OUTDOOR_REQUEST_TIMEOUT` (default: `20s`)
 - `RETENTION_ENABLED` (default: `true`)
 - `RETENTION_RUN_ON_START` (default: `true`; set `false` when database connection is lazy)
 - `RETENTION_DAYS` (default: `14`)
@@ -94,6 +91,20 @@ For browser dashboards, the Vite app can send `VITE_READ_API_KEY`; SSE uses the
 `read_key` query parameter because browsers cannot attach custom EventSource headers.
 For public deployments, prefer a same-origin proxy or cookie flow so the read key is
 not embedded in the JavaScript bundle.
+
+### Outdoor location privacy
+
+Treat `OUTDOOR_LOCATION` as a backend-only secret. Set it at runtime with Fly
+secrets (or an untracked local `.env`) and leave its `.env.example` assignment
+blank. Its value must never appear in tracked configuration, logs, model prompts,
+API responses, browser payloads, tests, or Git history.
+
+The backend sends the normalised postcode only to Postcodes.io for resolution.
+It rounds the returned coordinates to two decimal places before sending them
+only to Open-Meteo; the insight model receives outdoor measurements but no
+location or coordinates. `scripts/check-location-privacy.sh` rejects
+secret-bearing runtime files from the tracked tree and scans location-shaped
+content throughout reachable Git history.
 
 ## Run
 
@@ -132,22 +143,28 @@ following a durable database access.
 - Durable writes are idempotent by `(device_id, timestamp)`; legacy readings without `device_id` use `default`.
 - The `0004` migration creates the unique device/timestamp index concurrently so deploys avoid holding a long schema transaction.
 
-## Insights generation model
+## Insights generation
 
 Insights are precomputed in the backend, not generated per request.
 - Immediate warm-up from the first live reading when no snapshot is available
-- Event-triggered recompute on threshold/severity crossings or material changes over a rolling 10-minute window
+- Event-triggered recompute on threshold/severity crossings in either direction or material changes over a rolling 10-minute window
+- A reported severity is retained through the 30-minute event cooldown, so transient boundary chatter is ignored while a persistent clear or warning is emitted once the cooldown expires
+- Critical escalations and loss of particulate sensing bypass the event cooldown
 - Scheduled refresh after `OPENAI_INSIGHTS_REFRESH_INTERVAL` only when no newer event refresh has reset the age
 - Scheduled refreshes skip analysis when no new telemetry has arrived
+- Failed scheduled analyses retry no faster than every 30 minutes
 - Live readings trigger recompute checks and are used for analysis when newer than durable history
 - Delayed or duplicate batch readings do not rewind the event baseline
-- Live-triggered recomputes avoid durable reads so realtime dashboards do not wake Neon for AI copy alone
+- Live-triggered recomputes avoid durable reads so realtime dashboards do not wake Neon for insight generation alone
 - PMS5003 availability changes refresh insights; unavailable particulate samples are excluded from PM analysis
-- Outdoor context is fetched server-side every two hours and cached in memory: Postcodes.io resolves the configured UK postcode, Open-Meteo supplies the current temperature, and cost-capped OpenAI web search supplies official UK air-quality context
-- Temperature timestamps must be current and search-supplied temperature values are ignored, preventing hourly forecast rows from being misaligned
-- OpenAI insight calls are capped per UTC day; deterministic threshold insights continue immediately after that budget is exhausted
-- Only material outdoor changes trigger a new insight; source links are attached only when an insight uses outdoor context
-- `OUTDOOR_LOCATION` is never returned by an API endpoint or included in browser requests; location and weather lookups happen only from the backend
+- Outdoor context is fetched server-side every two hours and cached in memory: Postcodes.io resolves the configured UK postcode, while Open-Meteo supplies current temperature and modelled CAMS European PM2.5, PM10, and AQI
+- Initial failures or missing outdoor components retry every five minutes until a complete temperature and particulate snapshot is available
+- Weather and air-quality timestamps must be current, and component failures degrade independently so one unavailable feed does not mislabel the other
+- Every model run receives the cached outdoor metrics; ventilation advice is allowed only when outdoor particulate and temperature conditions both support it
+- A deterministic post-check replaces unsafe window-opening advice even if model output contradicts that rule; rules-only fallback insights never recommend ventilation without outdoor context
+- OpenAI insight calls are capped per process per UTC day; deterministic threshold insights continue immediately after that budget is exhausted
+- Material outdoor changes and recovery from unavailable or stale context trigger a new insight; source links are attached only when an insight uses outdoor context
+- `OUTDOOR_LOCATION` is never returned by an API endpoint or included in browser requests; location and outdoor-data lookups happen only from the backend
 - `/api/insights` returns the latest stored snapshot
 - Durable-analysis snapshots are persisted in Postgres and restored on backend restart
 - Live-only event snapshots stay in memory until the next durable recompute

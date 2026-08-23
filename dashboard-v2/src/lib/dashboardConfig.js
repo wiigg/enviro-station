@@ -56,9 +56,9 @@ export const PREFETCH_WINDOW_IDS = ["1h"];
 export const STREAM_WINDOW_IDS = ["live", "1h", "24h", "7d"];
 export const LIVE_SOURCE_WINDOW_IDS = new Set(["live"]);
 
-export const INSIGHT_POLL_INTERVAL_MS = 5 * MINUTE_MS;
+export const INSIGHT_POLL_INTERVAL_MS = MINUTE_MS;
 export const INSIGHT_MAX_ITEMS = 3;
-export const INSIGHT_DIAGNOSTIC_STALE_AFTER_MS = 7 * HOUR_MS;
+export const INSIGHT_DIAGNOSTIC_STALE_AFTER_MS = 2 * HOUR_MS;
 export const OPS_FEED_POLL_INTERVAL_MS = 5 * MINUTE_MS;
 export const OPS_FEED_MAX_ITEMS = 6;
 export const LIVE_READING_STALE_AFTER_MS = 90 * 1000;

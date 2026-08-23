@@ -3,7 +3,7 @@
 Enviro Station is an air quality monitoring platform with three services:
 
 - `device`: Raspberry Pi runtime that reads sensors and ingests readings
-- `backend`: Go API for ingest, storage, streaming, and AI insights
+- `backend`: Go API for ingest, storage, streaming, and insights
 - `dashboard-v2`: React dashboard for live and historical visibility
 
 ## Architecture
@@ -13,7 +13,8 @@ Enviro Station is an air quality monitoring platform with three services:
 3. Dashboard uses the live stream for realtime updates and device-scoped Postgres buckets for longer-range history.
 4. If Postgres is down, the backend can still boot in live-only mode and retry durable storage later.
 5. Particle readings carry `pm_available`; failed PMS5003 reads are stored as unavailable and excluded from charts and insights.
-6. Optional backend-only outdoor context combines deterministic current temperature with cached, cost-capped OpenAI air-quality search to improve ventilation advice without exposing the configured location to the browser.
+6. Optional backend-only outdoor context uses postcode-derived coordinates with Open-Meteo temperature and modelled CAMS European air quality to improve ventilation advice without exposing the configured location to the browser.
+7. Window-opening advice is emitted only when both outdoor particulate levels and temperature make ventilation appropriate.
 
 ## Repository Layout
 
@@ -25,6 +26,19 @@ Enviro Station is an air quality monitoring platform with three services:
 
 Each service tracks a single template file: `.env.example`.
 Create a local runtime file by copying it to `.env`.
+
+## Outdoor Location Privacy
+
+`OUTDOOR_LOCATION` is sensitive and must exist only as a backend runtime secret,
+such as a Fly secret. Keep its value out of tracked configuration, logs, model
+prompts, API and browser data, test fixtures, and every commit; the tracked
+`.env.example` entry must remain blank. CI enforces these repository guardrails
+with `scripts/check-location-privacy.sh`.
+
+The backend necessarily sends the normalised postcode only to Postcodes.io to
+resolve it. The returned coordinates are rounded to two decimal places before
+being sent to Open-Meteo for weather and air-quality lookups. Insights receive
+the resulting environmental metrics, never the postcode or coordinates.
 
 ## Quick Start
 

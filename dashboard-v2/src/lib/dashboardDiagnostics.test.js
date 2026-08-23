@@ -58,20 +58,29 @@ describe("buildDashboardDiagnostics", () => {
   });
 
   it("separates insight failure from live monitoring", () => {
-    const result = diagnostics({ insightsError: "AI insights are currently unavailable." });
+    const result = diagnostics({ insightsError: "Insights are currently unavailable." });
     const insights = result.checks.find((check) => check.id === "insights");
 
     expect(result.summary).toBe("1 check needs attention");
     expect(insights.summary).toContain("live monitoring is unaffected");
-    expect(insights.action).toContain("backend AI logs");
+    expect(insights.label).toBe("Insights");
+    expect(insights.action).toContain("backend insight logs");
   });
 
   it("flags insights that missed the scheduled safety refresh", () => {
-    const result = diagnostics({ insightGeneratedAt: now - 8 * 60 * 60_000 });
+    const result = diagnostics({ insightGeneratedAt: now - 3 * 60 * 60_000 });
     const insights = result.checks.find((check) => check.id === "insights");
 
     expect(insights.state).toBe("warn");
-    expect(insights.summary).toContain("8h ago");
-    expect(insights.action).toContain("six hours");
+    expect(insights.summary).toContain("3h ago");
+    expect(insights.action).toContain("every hour");
+  });
+
+  it("describes an outdoor trigger as a refresh reason, not insight evidence", () => {
+    const result = diagnostics({ insightTrigger: "outdoor" });
+    const insights = result.checks.find((check) => check.id === "insights");
+
+    expect(insights.summary).toContain("after outdoor data refreshed");
+    expect(insights.summary).not.toContain("via outdoor");
   });
 });

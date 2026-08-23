@@ -39,7 +39,7 @@ export default memo(function InsightsCard({
   return (
     <aside className="card panel insightsPanel">
       <div className="panelHead">
-        <h2>AI insights</h2>
+        <h2>Insights</h2>
       </div>
       {isLoadingInsights && insights.length === 0 ? (
         <p className="emptyState" role="status">

@@ -1,214 +1,232 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
 var outdoorTestNow = time.Date(2026, time.July, 12, 12, 34, 0, 0, time.UTC)
 
-func TestOutdoorProviderCachesOnDemandRefresh(t *testing.T) {
-	requestCount := 0
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/responses" {
-			http.NotFound(response, request)
-			return
-		}
-		requestCount++
-		response.Header().Set("Content-Type", "application/json")
-		_, _ = response.Write([]byte(`{
-          "output": [
-            {"type":"web_search_call","action":{"sources":[{"url":"https://www.metoffice.gov.uk/weather"}]}},
-			{"type":"message","content":[{"type":"output_text","text":"{\"temperature_c\":null,\"pm2\":null,\"pm10\":null,\"air_quality_category\":\"good\",\"observed_at\":\"2026-07-12T12:00:00Z\",\"data_quality\":\"forecast\"}"}]}
-          ]
-        }`))
-	}))
+func TestOutdoorProviderFetchesDeterministicCurrentConditions(t *testing.T) {
+	var postcodeRequests atomic.Int32
+	var weatherRequests atomic.Int32
+	var airQualityRequests atomic.Int32
+	server := newOutdoorTestServer(t, outdoorTestServerOptions{
+		onPostcode: func() { postcodeRequests.Add(1) },
+		onWeather:  func() { weatherRequests.Add(1) },
+		onAir:      func() { airQualityRequests.Add(1) },
+	})
 	defer server.Close()
 
-	provider := NewOpenAIOutdoorProvider(OutdoorSearchConfig{
-		APIKey:          "test-key",
-		BaseURL:         server.URL,
-		PostcodeBaseURL: server.URL,
-		WeatherBaseURL:  server.URL,
-		Location:        "TEST 1AA",
-		RequestTimeout:  time.Second,
-	})
-	provider.now = func() time.Time { return outdoorTestNow }
-	if _, ok := provider.EnsureFresh(context.Background()); !ok {
-		t.Fatal("expected first on-demand refresh to populate cache")
-	}
-	if _, ok := provider.EnsureFresh(context.Background()); !ok {
-		t.Fatal("expected second on-demand refresh to use cache")
-	}
-	if requestCount != 1 {
-		t.Fatalf("expected one web request, got %d", requestCount)
-	}
-}
-
-func TestOutdoorProviderEnforcesDailyRequestLimit(t *testing.T) {
-	requestCount := 0
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/responses" {
-			http.NotFound(response, request)
-			return
-		}
-		requestCount++
-		response.Header().Set("Content-Type", "application/json")
-		_, _ = response.Write([]byte(`{
-          "output": [
-            {"type":"web_search_call","action":{"sources":[{"url":"https://www.metoffice.gov.uk/weather"}]}},
-			{"type":"message","content":[{"type":"output_text","text":"{\"temperature_c\":null,\"pm2\":null,\"pm10\":null,\"air_quality_category\":\"good\",\"observed_at\":\"2026-07-12T12:00:00Z\",\"data_quality\":\"forecast\"}"}]}
-          ]
-        }`))
-	}))
-	defer server.Close()
-
-	provider := NewOpenAIOutdoorProvider(OutdoorSearchConfig{
-		APIKey:          "test-key",
-		BaseURL:         server.URL,
-		PostcodeBaseURL: server.URL,
-		WeatherBaseURL:  server.URL,
-		Location:        "TEST 1AA",
-		RequestTimeout:  time.Second,
-		DailyLimit:      1,
-	})
-	provider.now = func() time.Time { return outdoorTestNow }
-	if _, err := provider.fetch(context.Background()); err != nil {
-		t.Fatalf("first fetch: %v", err)
-	}
-	if _, err := provider.fetch(context.Background()); err == nil || !strings.Contains(err.Error(), "daily request limit") {
-		t.Fatalf("expected daily request limit error, got %v", err)
-	}
-	if requestCount != 1 {
-		t.Fatalf("expected one OpenAI request, got %d", requestCount)
-	}
-}
-
-func TestOutdoorProviderKeepsLocationPrivateAndSanitizesSources(t *testing.T) {
-	const privateLocation = "TEST 1AA"
-	var requestBody string
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/responses" {
-			http.NotFound(response, request)
-			return
-		}
-		var payload json.RawMessage
-		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
-			t.Errorf("decode request: %v", err)
-			response.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		requestBody = string(payload)
-		response.Header().Set("Content-Type", "application/json")
-		_, _ = response.Write([]byte(`{
-          "output": [
-            {
-              "type": "web_search_call",
-              "action": {
-                "sources": [
-                  {"type":"url","url":"https://www.metoffice.gov.uk/weather/forecast/TEST-1AA?location=TEST+1AA"},
-                  {"type":"url","url":"https://weather.metoffice.gov.uk/forecast/TEST-1AA"},
-                  {"type":"url","url":"https://uk-air.defra.gov.uk/latest/current"}
-                ]
-              }
-            },
-            {
-              "type": "message",
-              "content": [{
-                "type": "output_text",
-				"text": "{\"temperature_c\":null,\"pm2\":4.0,\"pm10\":9.0,\"air_quality_category\":\"good\",\"observed_at\":\"2026-07-12T12:00:00Z\",\"data_quality\":\"observed\"}"
-              }]
-            }
-          ]
-        }`))
-	}))
-	defer server.Close()
-
-	provider := NewOpenAIOutdoorProvider(OutdoorSearchConfig{
-		APIKey:          "test-key",
-		Model:           "test-model",
-		ReasoningEffort: "medium",
-		BaseURL:         server.URL,
-		PostcodeBaseURL: server.URL,
-		WeatherBaseURL:  server.URL,
-		Location:        privateLocation,
-		RequestTimeout:  time.Second,
-	})
-	provider.now = func() time.Time { return outdoorTestNow }
+	provider := newTestOutdoorProvider(server.URL)
 	conditions, err := provider.fetch(context.Background())
 	if err != nil {
 		t.Fatalf("fetch outdoor conditions: %v", err)
 	}
-	if !strings.Contains(requestBody, privateLocation) {
-		t.Fatal("expected private location in server-side OpenAI request")
+
+	if conditions.TemperatureC == nil || *conditions.TemperatureC != 27.9 {
+		t.Fatalf("expected 27.9°C temperature, got %v", conditions.TemperatureC)
 	}
-	for _, expected := range []string{
-		`"model":"test-model"`,
-		`"effort":"medium"`,
-		`"type":"web_search"`,
-		`"external_web_access":true`,
-		`"tool_choice":"required"`,
-		`"max_tool_calls":1`,
-		`"max_output_tokens":800`,
-		"You must use web search now",
-		"The current instant is 2026-07-12T12:34:00Z UTC",
-		"current UK local instant is Sunday 12 July 2026 13:34 BST (UTC+01:00)",
-		"Temperature is retrieved separately by a deterministic weather service",
-		"set temperature_c to null",
-		"Do not substitute daily values",
-		"do not provide general health advice",
-	} {
-		if !strings.Contains(requestBody, expected) {
-			t.Fatalf("expected web-search request instruction %q", expected)
+	if conditions.PM2 == nil || *conditions.PM2 != 6.8 {
+		t.Fatalf("expected PM2.5 6.8, got %v", conditions.PM2)
+	}
+	if conditions.PM10 == nil || *conditions.PM10 != 11.5 {
+		t.Fatalf("expected PM10 11.5, got %v", conditions.PM10)
+	}
+	if conditions.AirQualityCategory != "fair" {
+		t.Fatalf("expected fair European AQI, got %q", conditions.AirQualityCategory)
+	}
+	if conditions.TemperatureObservedAt == nil || *conditions.TemperatureObservedAt != "2026-07-12T12:30:00Z" {
+		t.Fatalf("expected current temperature timestamp, got %v", conditions.TemperatureObservedAt)
+	}
+	if conditions.AirQualityObservedAt == nil || *conditions.AirQualityObservedAt != "2026-07-12T12:30:00Z" {
+		t.Fatalf("expected current air-quality timestamp, got %v", conditions.AirQualityObservedAt)
+	}
+	if conditions.DataQuality != "forecast" {
+		t.Fatalf("expected modelled forecast quality, got %q", conditions.DataQuality)
+	}
+	for _, title := range []string{"Open-Meteo", "CAMS ENSEMBLE"} {
+		if !containsSourceTitle(conditions.Sources, title) {
+			t.Fatalf("expected %s attribution, got %#v", title, conditions.Sources)
 		}
 	}
-	if len(conditions.Sources) != 2 {
-		t.Fatalf("expected duplicate providers to collapse to two sources, got %d", len(conditions.Sources))
-	}
-	if conditions.Sources[0].URL != "https://www.metoffice.gov.uk/" {
-		t.Fatalf("expected location-bearing source path to be removed, got %q", conditions.Sources[0].URL)
+	if postcodeRequests.Load() != 1 || weatherRequests.Load() != 1 || airQualityRequests.Load() != 1 {
+		t.Fatalf(
+			"expected one request per endpoint, got postcode=%d weather=%d air_quality=%d",
+			postcodeRequests.Load(),
+			weatherRequests.Load(),
+			airQualityRequests.Load(),
+		)
 	}
 
 	publicPayload, err := json.Marshal(conditions)
 	if err != nil {
 		t.Fatalf("marshal public conditions: %v", err)
 	}
-	if strings.Contains(strings.ToUpper(string(publicPayload)), privateLocation) ||
-		strings.Contains(strings.ToLower(string(publicPayload)), "test1aa") {
-		t.Fatalf("private location leaked into public payload: %s", publicPayload)
+	for _, privateIdentifier := range []string{
+		"TEST 1AA",
+		"TEST1AA",
+		"51.410159",
+		"-0.838339",
+		"51.41",
+		"-0.84",
+	} {
+		if strings.Contains(strings.ToUpper(string(publicPayload)), strings.ToUpper(privateIdentifier)) {
+			t.Fatal("private location data leaked into the public outdoor payload")
+		}
 	}
 }
 
-func TestOutdoorProviderUsesDeterministicTemperatureInsteadOfSearchValue(t *testing.T) {
-	postcodeRequests := 0
-	weatherRequests := 0
+func TestOutdoorProviderCachesConditionsAndCoordinates(t *testing.T) {
+	var postcodeRequests atomic.Int32
+	var weatherRequests atomic.Int32
+	var airQualityRequests atomic.Int32
+	server := newOutdoorTestServer(t, outdoorTestServerOptions{
+		onPostcode: func() { postcodeRequests.Add(1) },
+		onWeather:  func() { weatherRequests.Add(1) },
+		onAir:      func() { airQualityRequests.Add(1) },
+	})
+	defer server.Close()
+
+	provider := newTestOutdoorProvider(server.URL)
+	if _, ok := provider.EnsureFresh(context.Background()); !ok {
+		t.Fatal("expected first on-demand refresh to populate cache")
+	}
+	if _, ok := provider.EnsureFresh(context.Background()); !ok {
+		t.Fatal("expected second on-demand refresh to use cache")
+	}
+	if _, err := provider.fetch(context.Background()); err != nil {
+		t.Fatalf("forced fetch: %v", err)
+	}
+
+	if postcodeRequests.Load() != 1 {
+		t.Fatalf("expected coordinates to be cached, got %d postcode requests", postcodeRequests.Load())
+	}
+	if weatherRequests.Load() != 2 || airQualityRequests.Load() != 2 {
+		t.Fatalf(
+			"expected cached refresh plus forced component calls, got weather=%d air_quality=%d",
+			weatherRequests.Load(),
+			airQualityRequests.Load(),
+		)
+	}
+}
+
+func TestOutdoorProviderDoesNotTreatInitialCacheFillAsMaterialChange(t *testing.T) {
+	server := newOutdoorTestServer(t, outdoorTestServerOptions{})
+	defer server.Close()
+
+	provider := newTestOutdoorProvider(server.URL)
+	if _, changed, err := provider.fetchAndStore(context.Background(), true); err != nil {
+		t.Fatalf("initial outdoor refresh: %v", err)
+	} else if changed {
+		t.Fatal("expected initial cache fill not to enqueue a duplicate insight analysis")
+	}
+}
+
+func TestOutdoorProviderSignalsRecoveryFromStaleCacheWithSameValues(t *testing.T) {
+	server := newOutdoorTestServer(t, outdoorTestServerOptions{})
+	defer server.Close()
+
+	provider := newTestOutdoorProvider(server.URL)
+	currentTime := outdoorTestNow
+	provider.now = func() time.Time { return currentTime }
+	provider.maxAge = time.Hour
+	if _, ok := provider.EnsureFresh(context.Background()); !ok {
+		t.Fatal("expected initial outdoor context")
+	}
+	currentTime = currentTime.Add(90 * time.Minute)
+	if _, ok := provider.Snapshot(); ok {
+		t.Fatal("expected cached outdoor context to be stale")
+	}
+
+	updates := 0
+	provider.refresh(context.Background(), func(initial bool) {
+		if initial {
+			t.Error("expected stale recovery to be a regular outdoor update")
+		}
+		updates++
+	})
+	if updates != 1 {
+		t.Fatalf("expected stale-to-fresh recovery callback, got %d", updates)
+	}
+	if _, ok := provider.Snapshot(); !ok {
+		t.Fatal("expected refreshed outdoor context to be usable")
+	}
+}
+
+func TestOutdoorProviderStartCoalescesInitialAndOnDemandRefresh(t *testing.T) {
+	var weatherRequests atomic.Int32
+	var airQualityRequests atomic.Int32
+	var callbacks atomic.Int32
+	server := newOutdoorTestServer(t, outdoorTestServerOptions{
+		onWeather: func() { weatherRequests.Add(1) },
+		onAir:     func() { airQualityRequests.Add(1) },
+	})
+	defer server.Close()
+
+	provider := newTestOutdoorProvider(server.URL)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	provider.Start(ctx, func(initial bool) {
+		if !initial {
+			t.Error("expected the startup callback to be marked initial")
+		}
+		callbacks.Add(1)
+	})
+	if _, ok := provider.EnsureFresh(ctx); !ok {
+		t.Fatal("expected initial outdoor refresh to populate cache")
+	}
+
+	if weatherRequests.Load() != 1 || airQualityRequests.Load() != 1 {
+		t.Fatalf(
+			"expected startup and on-demand refreshes to coalesce, got weather=%d air_quality=%d",
+			weatherRequests.Load(),
+			airQualityRequests.Load(),
+		)
+	}
+	deadline := time.Now().Add(time.Second)
+	for callbacks.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if callbacks.Load() != 1 {
+		t.Fatalf("expected one initial-ready callback, got %d", callbacks.Load())
+	}
+}
+
+func TestOutdoorProviderRetriesFailedInitialRefreshAndSignalsReadiness(t *testing.T) {
+	var weatherRequests atomic.Int32
+	var airQualityRequests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		response.Header().Set("Content-Type", "application/json")
 		switch request.URL.Path {
-		case "/responses":
-			_, _ = response.Write([]byte(`{
-              "output": [
-                {"type":"web_search_call","action":{"sources":[{"url":"https://uk-air.defra.gov.uk/latest/current"}]}},
-                {"type":"message","content":[{"type":"output_text","text":"{\"temperature_c\":16,\"pm2\":4,\"pm10\":9,\"air_quality_category\":\"good\",\"observed_at\":\"2026-07-12T12:00:00Z\",\"data_quality\":\"observed\"}"}]}
-              ]
-            }`))
 		case "/postcodes/TEST1AA":
-			postcodeRequests++
 			_, _ = response.Write([]byte(`{"status":200,"result":{"latitude":51.410159,"longitude":-0.838339}}`))
 		case "/v1/forecast":
-			weatherRequests++
-			if request.URL.Query().Get("current") != "temperature_2m" || request.URL.Query().Get("timeformat") != "unixtime" {
-				t.Errorf("unexpected weather query: %s", request.URL.RawQuery)
+			if weatherRequests.Add(1) == 1 {
+				response.WriteHeader(http.StatusServiceUnavailable)
+				return
 			}
 			_, _ = fmt.Fprintf(
 				response,
 				`{"current":{"time":%d,"temperature_2m":27.9}}`,
+				outdoorTestNow.Truncate(15*time.Minute).Unix(),
+			)
+		case "/v1/air-quality":
+			if airQualityRequests.Add(1) == 1 {
+				response.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			_, _ = fmt.Fprintf(
+				response,
+				`{"current":{"time":%d,"pm2_5":6.8,"pm10":11.5,"european_aqi":28}}`,
 				outdoorTestNow.Truncate(15*time.Minute).Unix(),
 			)
 		default:
@@ -217,59 +235,322 @@ func TestOutdoorProviderUsesDeterministicTemperatureInsteadOfSearchValue(t *test
 	}))
 	defer server.Close()
 
-	provider := NewOpenAIOutdoorProvider(OutdoorSearchConfig{
-		APIKey:          "test-key",
-		BaseURL:         server.URL,
-		PostcodeBaseURL: server.URL,
-		WeatherBaseURL:  server.URL,
-		Location:        "TEST 1AA",
-		RequestTimeout:  time.Second,
-	})
-	provider.now = func() time.Time { return outdoorTestNow }
+	provider := newTestOutdoorProvider(server.URL)
+	provider.initialRetry = 10 * time.Millisecond
+	updates := make(chan bool, 2)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	provider.Start(ctx, func(initial bool) { updates <- initial })
 
-	conditions, err := provider.fetch(context.Background())
-	if err != nil {
-		t.Fatalf("fetch conditions: %v", err)
+	select {
+	case initial := <-updates:
+		if !initial {
+			t.Fatal("expected retry success to signal initial readiness")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for initial outdoor retry")
 	}
-	if conditions.TemperatureC == nil || *conditions.TemperatureC != 27.9 {
-		t.Fatalf("expected deterministic 27.9°C temperature, got %v", conditions.TemperatureC)
-	}
-	if conditions.ObservedAt == nil || *conditions.ObservedAt != "2026-07-12T12:30:00Z" {
-		t.Fatalf("expected deterministic current timestamp, got %v", conditions.ObservedAt)
-	}
-	if postcodeRequests != 1 || weatherRequests != 1 {
-		t.Fatalf("expected one postcode and weather request, got postcode=%d weather=%d", postcodeRequests, weatherRequests)
-	}
-	if !containsSourceTitle(conditions.Sources, "Open-Meteo") {
-		t.Fatalf("expected Open-Meteo attribution, got %#v", conditions.Sources)
+	if weatherRequests.Load() != 2 || airQualityRequests.Load() != 2 {
+		t.Fatalf(
+			"expected each failed component to retry once, got weather=%d air_quality=%d",
+			weatherRequests.Load(),
+			airQualityRequests.Load(),
+		)
 	}
 }
 
-func TestOutdoorProviderRejectsWrongHourTemperature(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
-		response.Header().Set("Content-Type", "application/json")
-		_, _ = response.Write([]byte(`{
-          "output": [
-            {"type":"web_search_call","action":{"sources":[{"url":"https://weather.metoffice.gov.uk/forecast/test"}]}},
-            {"type":"message","content":[{"type":"output_text","text":"{\"temperature_c\":16,\"pm2\":null,\"pm10\":null,\"air_quality_category\":\"good\",\"observed_at\":\"2026-07-12T03:00:00Z\",\"data_quality\":\"forecast\"}"}]}
-          ]
-        }`))
+func TestOutdoorProviderRetriesMissingInitialComponent(t *testing.T) {
+	var weatherRequests atomic.Int32
+	var airQualityRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/postcodes/TEST1AA":
+			_, _ = response.Write([]byte(`{"status":200,"result":{"latitude":51.410159,"longitude":-0.838339}}`))
+		case "/v1/forecast":
+			weatherRequests.Add(1)
+			_, _ = fmt.Fprintf(
+				response,
+				`{"current":{"time":%d,"temperature_2m":27.9}}`,
+				outdoorTestNow.Truncate(15*time.Minute).Unix(),
+			)
+		case "/v1/air-quality":
+			if airQualityRequests.Add(1) == 1 {
+				response.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			_, _ = fmt.Fprintf(
+				response,
+				`{"current":{"time":%d,"pm2_5":6.8,"pm10":11.5,"european_aqi":28}}`,
+				outdoorTestNow.Truncate(15*time.Minute).Unix(),
+			)
+		default:
+			http.NotFound(response, request)
+		}
 	}))
 	defer server.Close()
 
-	provider := NewOpenAIOutdoorProvider(OutdoorSearchConfig{
-		APIKey:          "test-key",
-		BaseURL:         server.URL,
-		PostcodeBaseURL: server.URL,
-		WeatherBaseURL:  server.URL,
-		Location:        "TEST 1AA",
-		RequestTimeout:  time.Second,
+	provider := newTestOutdoorProvider(server.URL)
+	provider.initialRetry = 10 * time.Millisecond
+	updates := make(chan bool, 3)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	provider.Start(ctx, func(initial bool) { updates <- initial })
+
+	for update := 0; update < 2; update++ {
+		select {
+		case initial := <-updates:
+			if initial != (update == 0) {
+				t.Fatalf("unexpected initial marker for update %d: %t", update, initial)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for missing outdoor component to recover")
+		}
+	}
+	conditions, ok := provider.Snapshot()
+	if !ok || !hasCompleteOutdoorData(conditions) {
+		t.Fatalf("expected complete outdoor context after component retry, got %#v", conditions)
+	}
+	if weatherRequests.Load() != 2 || airQualityRequests.Load() != 2 {
+		t.Fatalf(
+			"expected partial refresh to retry both components once, got weather=%d air_quality=%d",
+			weatherRequests.Load(),
+			airQualityRequests.Load(),
+		)
+	}
+}
+
+func TestOutdoorProviderKeepsTemperatureWhenAirQualityFails(t *testing.T) {
+	server := newOutdoorTestServer(t, outdoorTestServerOptions{airQualityStatus: http.StatusBadGateway})
+	defer server.Close()
+
+	provider := newTestOutdoorProvider(server.URL)
+	conditions, err := provider.fetch(context.Background())
+	if err != nil {
+		t.Fatalf("expected temperature-only context to remain useful: %v", err)
+	}
+	if conditions.TemperatureC == nil || conditions.PM2 != nil || conditions.PM10 != nil {
+		t.Fatalf("expected only temperature, got %#v", conditions)
+	}
+	if conditions.AirQualityCategory != "unknown" {
+		t.Fatalf("expected unknown air quality, got %q", conditions.AirQualityCategory)
+	}
+	if len(conditions.Sources) != 1 || conditions.Sources[0].Title != "Open-Meteo" {
+		t.Fatalf("expected only Open-Meteo attribution, got %#v", conditions.Sources)
+	}
+}
+
+func TestOutdoorProviderKeepsAirQualityWhenWeatherFails(t *testing.T) {
+	server := newOutdoorTestServer(t, outdoorTestServerOptions{weatherStatus: http.StatusBadGateway})
+	defer server.Close()
+
+	provider := newTestOutdoorProvider(server.URL)
+	conditions, err := provider.fetch(context.Background())
+	if err != nil {
+		t.Fatalf("expected air-quality-only context to remain useful: %v", err)
+	}
+	if conditions.TemperatureC != nil || conditions.PM2 == nil || conditions.PM10 == nil {
+		t.Fatalf("expected only air-quality values, got %#v", conditions)
+	}
+	if conditions.AirQualityCategory != "fair" || conditions.AirQualityObservedAt == nil {
+		t.Fatalf("expected current fair air quality, got %#v", conditions)
+	}
+	if len(conditions.AirQualitySources) != 2 ||
+		!containsSourceTitle(conditions.AirQualitySources, "CAMS ENSEMBLE") {
+		t.Fatalf("expected Open-Meteo and CAMS attribution, got %#v", conditions.AirQualitySources)
+	}
+	if len(conditions.TemperatureSources) != 0 {
+		t.Fatalf("expected no weather attribution, got %#v", conditions.TemperatureSources)
+	}
+}
+
+func TestOutdoorProviderFailsWhenBothComponentsFail(t *testing.T) {
+	server := newOutdoorTestServer(t, outdoorTestServerOptions{
+		weatherStatus:    http.StatusBadGateway,
+		airQualityStatus: http.StatusServiceUnavailable,
+	})
+	defer server.Close()
+
+	provider := newTestOutdoorProvider(server.URL)
+	_, err := provider.fetch(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "outdoor data unavailable") {
+		t.Fatalf("expected combined outdoor failure, got %v", err)
+	}
+}
+
+func TestOutdoorProviderSanitizesSensitiveTransportErrors(t *testing.T) {
+	const privateLocation = "PRIVATE-OUTDOOR-LOCATION"
+	const privateLatitude = 12.345678
+	const privateLongitude = -98.765432
+
+	provider := NewOpenMeteoOutdoorProvider(OutdoorProviderConfig{
+		Location:          privateLocation,
+		PostcodeBaseURL:   "https://location.invalid",
+		WeatherBaseURL:    "https://weather.invalid",
+		AirQualityBaseURL: "https://air.invalid",
+		RequestTimeout:    time.Second,
 	})
 	provider.now = func() time.Time { return outdoorTestNow }
+	provider.httpClient = &http.Client{Transport: outdoorRoundTripperFunc(
+		func(request *http.Request) (*http.Response, error) {
+			return nil, fmt.Errorf("synthetic transport failure for %s", request.URL.String())
+		},
+	)}
+	formattedLocation := fmt.Sprintf("%s %v %+v %#v %q", provider.location, provider.location, provider.location, provider.location, provider.location)
+	if strings.Contains(formattedLocation, privateLocation) {
+		t.Fatal("private location formatting was not redacted")
+	}
+	marshaledLocation, err := json.Marshal(provider.location)
+	if err != nil {
+		t.Fatal("marshal private location")
+	}
+	if strings.Contains(string(marshaledLocation), privateLocation) {
+		t.Fatal("private location JSON was not redacted")
+	}
+	var capturedLogs bytes.Buffer
+	originalLogWriter := log.Writer()
+	originalLogFlags := log.Flags()
+	log.SetOutput(&capturedLogs)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(originalLogWriter)
+		log.SetFlags(originalLogFlags)
+	})
 
-	_, err := provider.fetch(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "current observation timestamp") {
-		t.Fatalf("expected wrong-hour temperature to be rejected, got %v", err)
+	var target map[string]any
+	err = provider.getJSON(
+		context.Background(),
+		provider.postcodeBaseURL+"/postcodes/"+privateLocation,
+		&target,
+	)
+	if err == nil {
+		t.Fatal("expected resolver transport failure")
+	}
+	if strings.Contains(err.Error(), privateLocation) || strings.Contains(err.Error(), provider.postcodeBaseURL) {
+		t.Fatal("transport error exposed the private location URL")
+	}
+	provider.httpClient = &http.Client{Transport: outdoorRoundTripperFunc(
+		func(request *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body: outdoorErrorReadCloser{
+					err: fmt.Errorf("synthetic response failure for %s", request.URL.String()),
+				},
+				Header: make(http.Header),
+			}, nil
+		},
+	)}
+	if _, ok := provider.EnsureFresh(context.Background()); ok {
+		t.Fatal("expected location-resolution refresh to fail")
+	}
+
+	provider.coordinatesMu.Lock()
+	provider.latitude = privateLatitude
+	provider.longitude = privateLongitude
+	provider.hasCoordinates = true
+	provider.coordinatesMu.Unlock()
+
+	if _, ok := provider.EnsureFresh(context.Background()); ok {
+		t.Fatal("expected outdoor refresh to fail")
+	}
+	for _, sensitiveValue := range []string{
+		privateLocation,
+		"12.345678",
+		"-98.765432",
+		"12.35",
+		"-98.77",
+		provider.weatherBaseURL,
+		provider.airQualityBaseURL,
+	} {
+		if strings.Contains(capturedLogs.String(), sensitiveValue) {
+			t.Fatal("outdoor refresh log exposed private request data")
+		}
+	}
+}
+
+func TestOutdoorProviderRejectsStaleAirQuality(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/air-quality" {
+			http.NotFound(response, request)
+			return
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{
+			"current":{"time":1783828800,"pm2_5":6.8,"pm10":11.5,"european_aqi":28}
+		}`))
+	}))
+	defer server.Close()
+
+	provider := NewOpenMeteoOutdoorProvider(OutdoorProviderConfig{
+		Location:          "TEST 1AA",
+		AirQualityBaseURL: server.URL,
+		RequestTimeout:    time.Second,
+	})
+	_, _, _, _, err := provider.fetchCurrentAirQuality(
+		context.Background(),
+		outdoorTestNow,
+		51.410159,
+		-0.838339,
+	)
+	if err == nil || !strings.Contains(err.Error(), "timestamp was stale") {
+		t.Fatalf("expected stale air-quality timestamp error, got %v", err)
+	}
+}
+
+func TestOutdoorProviderClampsMaxAgePastRefreshInterval(t *testing.T) {
+	provider := NewOpenMeteoOutdoorProvider(OutdoorProviderConfig{
+		Location:        "TEST 1AA",
+		RefreshInterval: 2 * time.Hour,
+		MaxAge:          2*time.Hour + 5*time.Minute,
+	})
+	minimumMaxAge := provider.refreshInterval + outdoorRefreshGrace
+	if provider.maxAge < minimumMaxAge {
+		t.Fatalf("expected max age with refresh grace, got minimum=%s max_age=%s", minimumMaxAge, provider.maxAge)
+	}
+}
+
+func TestOutdoorSourcesMatchInsightTopic(t *testing.T) {
+	openMeteo := AlertSource{Title: "Open-Meteo", URL: "https://open-meteo.com/en/docs"}
+	cams := AlertSource{Title: "CAMS ENSEMBLE", URL: "https://atmosphere.copernicus.eu/"}
+	conditions := OutdoorConditions{
+		Sources:            []AlertSource{openMeteo, cams},
+		TemperatureSources: []AlertSource{openMeteo},
+		AirQualitySources:  []AlertSource{openMeteo, cams},
+	}
+
+	temperatureSources := outdoorSourcesForTopic(conditions, "temperature")
+	if len(temperatureSources) != 1 || temperatureSources[0].Title != "Open-Meteo" {
+		t.Fatalf("expected weather attribution only, got %#v", temperatureSources)
+	}
+	airQualitySources := outdoorSourcesForTopic(conditions, "air_quality")
+	if len(airQualitySources) != 2 || !containsSourceTitle(airQualitySources, "CAMS ENSEMBLE") {
+		t.Fatalf("expected Open-Meteo and CAMS attribution, got %#v", airQualitySources)
+	}
+	if generalSources := outdoorSourcesForTopic(conditions, "general"); len(generalSources) != 0 {
+		t.Fatalf("expected no outdoor attribution for general insight, got %#v", generalSources)
+	}
+}
+
+func TestOutdoorCategoryFromEuropeanAQI(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    *float64
+		expected string
+	}{
+		{name: "missing", value: nil, expected: "unknown"},
+		{name: "good", value: floatPointer(20), expected: "good"},
+		{name: "fair", value: floatPointer(21), expected: "fair"},
+		{name: "moderate", value: floatPointer(41), expected: "moderate"},
+		{name: "poor", value: floatPointer(61), expected: "poor"},
+		{name: "very poor", value: floatPointer(81), expected: "very_poor"},
+		{name: "extremely poor", value: floatPointer(101), expected: "extremely_poor"},
+		{name: "invalid", value: floatPointer(-1), expected: "unknown"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if category := outdoorCategoryFromEuropeanAQI(test.value); category != test.expected {
+				t.Fatalf("expected %q, got %q", test.expected, category)
+			}
+		})
 	}
 }
 
@@ -308,6 +589,108 @@ func TestOutdoorConditionsMaterialChangeThresholds(t *testing.T) {
 	}
 }
 
+type outdoorTestServerOptions struct {
+	onPostcode       func()
+	onWeather        func()
+	onAir            func()
+	weatherStatus    int
+	airQualityStatus int
+}
+
+func newOutdoorTestServer(t *testing.T, options outdoorTestServerOptions) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/postcodes/TEST1AA":
+			if options.onPostcode != nil {
+				options.onPostcode()
+			}
+			_, _ = response.Write([]byte(`{"status":200,"result":{"latitude":51.410159,"longitude":-0.838339}}`))
+		case "/v1/forecast":
+			if options.onWeather != nil {
+				options.onWeather()
+			}
+			assertOutdoorLocationQuery(t, request)
+			if request.URL.Query().Get("current") != "temperature_2m" ||
+				request.URL.Query().Get("timeformat") != "unixtime" {
+				t.Error("unexpected weather query")
+			}
+			if options.weatherStatus != 0 {
+				response.WriteHeader(options.weatherStatus)
+				return
+			}
+			_, _ = fmt.Fprintf(
+				response,
+				`{"current":{"time":%d,"temperature_2m":27.9}}`,
+				outdoorTestNow.Truncate(15*time.Minute).Unix(),
+			)
+		case "/v1/air-quality":
+			if options.onAir != nil {
+				options.onAir()
+			}
+			assertOutdoorLocationQuery(t, request)
+			if request.URL.Query().Get("current") != "pm2_5,pm10,european_aqi" ||
+				request.URL.Query().Get("domains") != "cams_europe" ||
+				request.URL.Query().Get("timeformat") != "unixtime" {
+				t.Error("unexpected air-quality query")
+			}
+			if options.airQualityStatus != 0 {
+				response.WriteHeader(options.airQualityStatus)
+				return
+			}
+			_, _ = fmt.Fprintf(
+				response,
+				`{"current":{"time":%d,"pm2_5":6.8,"pm10":11.5,"european_aqi":28}}`,
+				outdoorTestNow.Truncate(15*time.Minute).Unix(),
+			)
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+}
+
+func assertOutdoorLocationQuery(t *testing.T, request *http.Request) {
+	t.Helper()
+	if request.URL.Query().Get("latitude") != "51.41" ||
+		request.URL.Query().Get("longitude") != "-0.84" {
+		t.Error("unexpected outdoor coordinates")
+	}
+	if strings.Contains(strings.ToUpper(request.URL.RawQuery), "TEST1AA") {
+		t.Error("postcode leaked into data-provider query")
+	}
+}
+
+type outdoorRoundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (roundTrip outdoorRoundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return roundTrip(request)
+}
+
+type outdoorErrorReadCloser struct {
+	err error
+}
+
+func (reader outdoorErrorReadCloser) Read(_ []byte) (int, error) {
+	return 0, reader.err
+}
+
+func (outdoorErrorReadCloser) Close() error {
+	return nil
+}
+
+func newTestOutdoorProvider(baseURL string) *OpenMeteoOutdoorProvider {
+	provider := NewOpenMeteoOutdoorProvider(OutdoorProviderConfig{
+		Location:          "TEST 1AA",
+		PostcodeBaseURL:   baseURL,
+		WeatherBaseURL:    baseURL,
+		AirQualityBaseURL: baseURL,
+		RequestTimeout:    time.Second,
+	})
+	provider.now = func() time.Time { return outdoorTestNow }
+	return provider
+}
+
 func containsSourceTitle(sources []AlertSource, title string) bool {
 	for _, source := range sources {
 		if source.Title == title {
@@ -315,4 +698,8 @@ func containsSourceTitle(sources []AlertSource, title string) bool {
 		}
 	}
 	return false
+}
+
+func floatPointer(value float64) *float64 {
+	return &value
 }

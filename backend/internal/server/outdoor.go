@@ -1,9 +1,9 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -14,35 +14,33 @@ import (
 	"strings"
 	"sync"
 	"time"
-	_ "time/tzdata"
 )
 
 const (
 	defaultOutdoorRefreshInterval = 2 * time.Hour
-	defaultOutdoorMaxAge          = 90 * time.Minute
+	defaultOutdoorMaxAge          = 3 * time.Hour
 	defaultOutdoorRequestTimeout  = 20 * time.Second
-	defaultOutdoorDailyLimit      = 12
+	defaultOutdoorInitialRetry    = 5 * time.Minute
+	outdoorRefreshGrace           = 15 * time.Minute
 	outdoorObservationTolerance   = 2 * time.Hour
-	outdoorMaxOutputTokens        = 800
 	defaultPostcodeBaseURL        = "https://api.postcodes.io"
 	defaultWeatherBaseURL         = "https://api.open-meteo.com"
+	defaultAirQualityBaseURL      = "https://air-quality-api.open-meteo.com"
+	outdoorCoordinatePrecision    = 2
 )
 
-var outdoorAllowedDomains = []string{
-	"metoffice.gov.uk",
-	"uk-air.defra.gov.uk",
-	"gov.uk",
-}
-
 type OutdoorConditions struct {
-	TemperatureC       *float64      `json:"temperature_c"`
-	PM2                *float64      `json:"pm2"`
-	PM10               *float64      `json:"pm10"`
-	AirQualityCategory string        `json:"air_quality_category"`
-	ObservedAt         *string       `json:"observed_at"`
-	DataQuality        string        `json:"data_quality"`
-	FetchedAt          int64         `json:"fetched_at"`
-	Sources            []AlertSource `json:"-"`
+	TemperatureC          *float64      `json:"temperature_c"`
+	PM2                   *float64      `json:"pm2"`
+	PM10                  *float64      `json:"pm10"`
+	AirQualityCategory    string        `json:"air_quality_category"`
+	TemperatureObservedAt *string       `json:"temperature_observed_at"`
+	AirQualityObservedAt  *string       `json:"air_quality_observed_at"`
+	DataQuality           string        `json:"data_quality"`
+	FetchedAt             int64         `json:"fetched_at"`
+	Sources               []AlertSource `json:"-"`
+	TemperatureSources    []AlertSource `json:"-"`
+	AirQualitySources     []AlertSource `json:"-"`
 }
 
 type OutdoorContextSource interface {
@@ -51,7 +49,7 @@ type OutdoorContextSource interface {
 
 type OutdoorContextMonitor interface {
 	OutdoorContextSource
-	Start(ctx context.Context, onMaterialChange func())
+	Start(ctx context.Context, onUpdate func(initial bool))
 }
 
 type OutdoorContextRefresher interface {
@@ -59,34 +57,37 @@ type OutdoorContextRefresher interface {
 	EnsureFresh(ctx context.Context) (OutdoorConditions, bool)
 }
 
-type OutdoorSearchConfig struct {
-	APIKey          string
-	Model           string
-	ReasoningEffort string
-	BaseURL         string
-	Location        string
-	RefreshInterval time.Duration
-	MaxAge          time.Duration
-	RequestTimeout  time.Duration
-	DailyLimit      int
-	PostcodeBaseURL string
-	WeatherBaseURL  string
+type OutdoorProviderConfig struct {
+	Location          string
+	RefreshInterval   time.Duration
+	MaxAge            time.Duration
+	RequestTimeout    time.Duration
+	PostcodeBaseURL   string
+	WeatherBaseURL    string
+	AirQualityBaseURL string
 }
 
-type OpenAIOutdoorProvider struct {
-	httpClient      *http.Client
-	apiKey          string
-	model           string
-	reasoningEffort string
-	baseURL         string
-	location        string
-	refreshInterval time.Duration
-	maxAge          time.Duration
-	requestTimeout  time.Duration
-	requestBudget   *dailyRequestBudget
-	postcodeBaseURL string
-	weatherBaseURL  string
-	now             func() time.Time
+type privateOutdoorLocation string
+
+func (privateOutdoorLocation) Format(state fmt.State, _ rune) {
+	_, _ = io.WriteString(state, "[redacted]")
+}
+
+func (privateOutdoorLocation) MarshalJSON() ([]byte, error) {
+	return json.Marshal("[redacted]")
+}
+
+type OpenMeteoOutdoorProvider struct {
+	httpClient        *http.Client
+	location          privateOutdoorLocation
+	refreshInterval   time.Duration
+	maxAge            time.Duration
+	requestTimeout    time.Duration
+	initialRetry      time.Duration
+	postcodeBaseURL   string
+	weatherBaseURL    string
+	airQualityBaseURL string
+	now               func() time.Time
 
 	coordinatesMu  sync.Mutex
 	latitude       float64
@@ -100,73 +101,87 @@ type OpenAIOutdoorProvider struct {
 	hasLatest bool
 }
 
-func NewOpenAIOutdoorProvider(config OutdoorSearchConfig) *OpenAIOutdoorProvider {
-	model := strings.TrimSpace(config.Model)
-	if model == "" {
-		model = "gpt-5.6-luna"
-	}
-	reasoningEffort := strings.TrimSpace(config.ReasoningEffort)
-	if reasoningEffort == "" {
-		reasoningEffort = "medium"
-	}
-	baseURL := strings.TrimSpace(config.BaseURL)
-	if baseURL == "" {
-		baseURL = "https://api.openai.com/v1"
-	}
+func NewOpenMeteoOutdoorProvider(config OutdoorProviderConfig) *OpenMeteoOutdoorProvider {
 	refreshInterval := config.RefreshInterval
 	if refreshInterval < time.Minute {
 		refreshInterval = defaultOutdoorRefreshInterval
 	}
 	maxAge := config.MaxAge
-	if maxAge < refreshInterval {
+	if maxAge <= 0 {
 		maxAge = defaultOutdoorMaxAge
+	}
+	minimumMaxAge := refreshInterval + outdoorRefreshGrace
+	if maxAge < minimumMaxAge {
+		maxAge = minimumMaxAge
 	}
 	requestTimeout := config.RequestTimeout
 	if requestTimeout <= 0 {
 		requestTimeout = defaultOutdoorRequestTimeout
 	}
-	location := strings.TrimSpace(config.Location)
-	dailyLimit := config.DailyLimit
-	if dailyLimit < 1 {
-		dailyLimit = defaultOutdoorDailyLimit
+	initialRetry := defaultOutdoorInitialRetry
+	if refreshInterval < initialRetry {
+		initialRetry = refreshInterval
 	}
 
-	return &OpenAIOutdoorProvider{
-		httpClient:      &http.Client{Timeout: requestTimeout},
-		apiKey:          strings.TrimSpace(config.APIKey),
-		model:           model,
-		reasoningEffort: reasoningEffort,
-		baseURL:         strings.TrimRight(baseURL, "/"),
-		location:        location,
-		refreshInterval: refreshInterval,
-		maxAge:          maxAge,
-		requestTimeout:  requestTimeout,
-		requestBudget:   newDailyRequestBudget(dailyLimit),
-		postcodeBaseURL: baseURLOrDefault(config.PostcodeBaseURL, defaultPostcodeBaseURL),
-		weatherBaseURL:  baseURLOrDefault(config.WeatherBaseURL, defaultWeatherBaseURL),
-		now:             time.Now,
+	return &OpenMeteoOutdoorProvider{
+		httpClient:        &http.Client{Timeout: requestTimeout},
+		location:          privateOutdoorLocation(strings.TrimSpace(config.Location)),
+		refreshInterval:   refreshInterval,
+		maxAge:            maxAge,
+		requestTimeout:    requestTimeout,
+		initialRetry:      initialRetry,
+		postcodeBaseURL:   baseURLOrDefault(config.PostcodeBaseURL, defaultPostcodeBaseURL),
+		weatherBaseURL:    baseURLOrDefault(config.WeatherBaseURL, defaultWeatherBaseURL),
+		airQualityBaseURL: baseURLOrDefault(config.AirQualityBaseURL, defaultAirQualityBaseURL),
+		now:               time.Now,
 	}
 }
 
-func (provider *OpenAIOutdoorProvider) Start(
+func (provider *OpenMeteoOutdoorProvider) Start(
 	ctx context.Context,
-	onMaterialChange func(),
+	onUpdate func(initial bool),
 ) {
 	provider.startOnce.Do(func() {
-		log.Printf("outdoor context monitor started")
+		log.Printf("outdoor context monitor started provider=open-meteo")
 		workerStarted := make(chan struct{})
 		go func() {
 			close(workerStarted)
-			provider.refresh(ctx, onMaterialChange)
-			ticker := time.NewTicker(provider.refreshInterval)
-			defer ticker.Stop()
+			initialNotified := false
+			initialUsable, initialComplete := provider.refreshInitial(
+				ctx,
+				onUpdate,
+				false,
+				true,
+			)
+			initialNotified = initialUsable
+			nextRefresh := provider.refreshInterval
+			if !initialComplete {
+				nextRefresh = provider.initialRetry
+			}
+			timer := time.NewTimer(nextRefresh)
+			defer timer.Stop()
 
 			for {
 				select {
 				case <-ctx.Done():
 					return
-				case <-ticker.C:
-					provider.refresh(ctx, onMaterialChange)
+				case <-timer.C:
+					if initialComplete {
+						initialComplete = provider.refresh(ctx, onUpdate)
+					} else {
+						initialUsable, initialComplete = provider.refreshInitial(
+							ctx,
+							onUpdate,
+							true,
+							!initialNotified,
+						)
+						initialNotified = initialNotified || initialUsable
+					}
+					nextRefresh = provider.refreshInterval
+					if !initialComplete {
+						nextRefresh = provider.initialRetry
+					}
+					timer.Reset(nextRefresh)
 				}
 			}
 		}()
@@ -177,7 +192,31 @@ func (provider *OpenAIOutdoorProvider) Start(
 	})
 }
 
-func (provider *OpenAIOutdoorProvider) Snapshot() (OutdoorConditions, bool) {
+func (provider *OpenMeteoOutdoorProvider) refreshInitial(
+	parent context.Context,
+	onUpdate func(initial bool),
+	force bool,
+	notifyFirst bool,
+) (bool, bool) {
+	log.Printf("outdoor context initial refresh started timeout=%s provider=open-meteo", provider.requestTimeout)
+	conditions, changed, err := provider.fetchAndStore(parent, force)
+	if err != nil {
+		log.Printf("outdoor context initial refresh failed: %v", err)
+		return false, false
+	}
+	log.Printf(
+		"outdoor context initial refresh completed temperature_available=%t pm_available=%t quality=%s provider=open-meteo",
+		conditions.TemperatureC != nil,
+		conditions.PM2 != nil || conditions.PM10 != nil,
+		conditions.AirQualityCategory,
+	)
+	if onUpdate != nil && (notifyFirst || changed) {
+		onUpdate(notifyFirst)
+	}
+	return true, hasCompleteOutdoorData(conditions)
+}
+
+func (provider *OpenMeteoOutdoorProvider) Snapshot() (OutdoorConditions, bool) {
 	provider.mu.RLock()
 	conditions := provider.latest
 	hasLatest := provider.hasLatest
@@ -187,33 +226,36 @@ func (provider *OpenAIOutdoorProvider) Snapshot() (OutdoorConditions, bool) {
 		return OutdoorConditions{}, false
 	}
 	conditions.Sources = cloneAlertSources(conditions.Sources)
+	conditions.TemperatureSources = cloneAlertSources(conditions.TemperatureSources)
+	conditions.AirQualitySources = cloneAlertSources(conditions.AirQualitySources)
 	return conditions, true
 }
 
-func (provider *OpenAIOutdoorProvider) refresh(
+func (provider *OpenMeteoOutdoorProvider) refresh(
 	parent context.Context,
-	onMaterialChange func(),
-) {
-	log.Printf("outdoor context refresh started timeout=%s", provider.requestTimeout)
+	onUpdate func(initial bool),
+) bool {
+	log.Printf("outdoor context refresh started timeout=%s provider=open-meteo", provider.requestTimeout)
 	conditions, changed, err := provider.fetchAndStore(parent, true)
 	if err != nil {
 		log.Printf("outdoor context refresh failed: %v", err)
-		return
+		return false
 	}
 
 	log.Printf(
-		"outdoor context refreshed temperature_available=%t pm_available=%t quality=%s material_change=%t",
+		"outdoor context refreshed temperature_available=%t pm_available=%t quality=%s material_change=%t provider=open-meteo",
 		conditions.TemperatureC != nil,
 		conditions.PM2 != nil || conditions.PM10 != nil,
 		conditions.AirQualityCategory,
 		changed,
 	)
-	if changed && onMaterialChange != nil {
-		onMaterialChange()
+	if changed && onUpdate != nil {
+		onUpdate(false)
 	}
+	return hasCompleteOutdoorData(conditions)
 }
 
-func (provider *OpenAIOutdoorProvider) EnsureFresh(parent context.Context) (OutdoorConditions, bool) {
+func (provider *OpenMeteoOutdoorProvider) EnsureFresh(parent context.Context) (OutdoorConditions, bool) {
 	if conditions, ok := provider.Snapshot(); ok {
 		return conditions, true
 	}
@@ -223,11 +265,11 @@ func (provider *OpenAIOutdoorProvider) EnsureFresh(parent context.Context) (Outd
 		log.Printf("on-demand outdoor context refresh failed: %v", err)
 		return OutdoorConditions{}, false
 	}
-	log.Printf("on-demand outdoor context refresh completed")
+	log.Printf("on-demand outdoor context refresh completed provider=open-meteo")
 	return conditions, true
 }
 
-func (provider *OpenAIOutdoorProvider) fetchAndStore(
+func (provider *OpenMeteoOutdoorProvider) fetchAndStore(
 	parent context.Context,
 	force bool,
 ) (OutdoorConditions, bool, error) {
@@ -239,6 +281,12 @@ func (provider *OpenAIOutdoorProvider) fetchAndStore(
 			return conditions, false, nil
 		}
 	}
+	provider.mu.RLock()
+	previous := provider.latest
+	hadLatest := provider.hasLatest
+	provider.mu.RUnlock()
+	previousWasFresh := hadLatest &&
+		provider.currentTime().Sub(time.UnixMilli(previous.FetchedAt)) <= provider.maxAge
 
 	ctx, cancel := context.WithTimeout(parent, provider.requestTimeout)
 	defer cancel()
@@ -249,226 +297,183 @@ func (provider *OpenAIOutdoorProvider) fetchAndStore(
 	}
 
 	provider.mu.Lock()
-	changed := !provider.hasLatest || outdoorConditionsMateriallyChanged(provider.latest, conditions)
+	changed := hadLatest &&
+		(!previousWasFresh || outdoorConditionsMateriallyChanged(previous, conditions))
 	provider.latest = conditions
 	provider.hasLatest = true
 	provider.mu.Unlock()
 	return conditions, changed, nil
 }
 
-func (provider *OpenAIOutdoorProvider) fetch(ctx context.Context) (OutdoorConditions, error) {
-	if provider.apiKey == "" || provider.location == "" {
-		return OutdoorConditions{}, fmt.Errorf("outdoor search is not configured")
+func (provider *OpenMeteoOutdoorProvider) fetch(ctx context.Context) (OutdoorConditions, error) {
+	if provider.location == "" {
+		return OutdoorConditions{}, fmt.Errorf("outdoor context is not configured")
 	}
+
 	now := provider.currentTime().UTC()
-	localNow := outdoorLocalTime(now)
-	if !provider.requestBudget.take(now) {
-		return OutdoorConditions{}, fmt.Errorf("outdoor daily request limit reached")
-	}
-
-	requestPayload := map[string]any{
-		"model":             provider.model,
-		"max_output_tokens": outdoorMaxOutputTokens,
-		"max_tool_calls":    1,
-		"reasoning": map[string]any{
-			"effort": provider.reasoningEffort,
-		},
-		"tools": []map[string]any{{
-			"type":                "web_search",
-			"search_context_size": "low",
-			"external_web_access": true,
-			"filters": map[string]any{
-				"allowed_domains": outdoorAllowedDomains,
-			},
-			"user_location": map[string]any{
-				"type":     "approximate",
-				"country":  "GB",
-				"timezone": "Europe/London",
-			},
-		}},
-		"tool_choice": "required",
-		"include":     []string{"web_search_call.action.sources"},
-		"input": []map[string]any{{
-			"role": "user",
-			"content": []map[string]any{{
-				"type": "input_text",
-				"text": fmt.Sprintf(
-					"This lookup exists only to provide current outdoor air-quality context for indoor insights. You must use web search now because the cached context is missing or stale. The current instant is %s UTC and the current UK local instant is %s. Search current official UK air-quality sources for postcode %s; do not provide general health advice or recommendations. Temperature is retrieved separately by a deterministic weather service: do not search for it and set temperature_c to null. Return current PM2.5 and PM10 in ug/m3 when reliably available, the UK air-quality category, the observation or forecast time, and whether values are observed or forecast. Do not substitute daily values or readings from another time. Use null for unavailable particulate measurements or time. Do not return or repeat the postcode, town, address, coordinates, or any other location identifier.",
-					now.Format(time.RFC3339),
-					localNow.Format("Monday 2 January 2006 15:04 MST (UTCZ07:00)"),
-					provider.location,
-				),
-			}},
-		}},
-		"text": map[string]any{
-			"format": map[string]any{
-				"type":   "json_schema",
-				"name":   "outdoor_conditions",
-				"strict": true,
-				"schema": outdoorConditionsSchema(),
-			},
-		},
-	}
-
-	requestBody, err := json.Marshal(requestPayload)
+	latitude, longitude, err := provider.resolveCoordinates(ctx)
 	if err != nil {
-		return OutdoorConditions{}, fmt.Errorf("marshal outdoor request: %w", err)
-	}
-	request, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodPost,
-		provider.baseURL+"/responses",
-		bytes.NewReader(requestBody),
-	)
-	if err != nil {
-		return OutdoorConditions{}, fmt.Errorf("build outdoor request: %w", err)
-	}
-	request.Header.Set("Authorization", "Bearer "+provider.apiKey)
-	request.Header.Set("Content-Type", "application/json")
-
-	response, err := provider.httpClient.Do(request)
-	if err != nil {
-		return OutdoorConditions{}, fmt.Errorf("outdoor request failed: %w", err)
-	}
-	defer response.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
-	if err != nil {
-		return OutdoorConditions{}, fmt.Errorf("read outdoor response: %w", err)
-	}
-	if response.StatusCode >= http.StatusMultipleChoices {
-		return OutdoorConditions{}, fmt.Errorf("openai outdoor status %d", response.StatusCode)
+		return OutdoorConditions{}, err
 	}
 
-	var modelResponse responsesAPIResponse
-	if err = json.Unmarshal(body, &modelResponse); err != nil {
-		return OutdoorConditions{}, fmt.Errorf("decode outdoor response: %w", err)
+	type temperatureResult struct {
+		value      float64
+		observedAt string
+		err        error
 	}
-	text := responseOutputText(modelResponse)
-	if text == "" {
-		return OutdoorConditions{}, fmt.Errorf("outdoor response did not include text output")
+	type airQualityResult struct {
+		pm2        *float64
+		pm10       *float64
+		category   string
+		observedAt string
+		err        error
 	}
+	temperatureResults := make(chan temperatureResult, 1)
+	airQualityResults := make(chan airQualityResult, 1)
+	go func() {
+		value, observedAt, fetchErr := provider.fetchCurrentTemperature(ctx, now, latitude, longitude)
+		temperatureResults <- temperatureResult{value: value, observedAt: observedAt, err: fetchErr}
+	}()
+	go func() {
+		pm2, pm10, category, observedAt, fetchErr := provider.fetchCurrentAirQuality(ctx, now, latitude, longitude)
+		airQualityResults <- airQualityResult{
+			pm2: pm2, pm10: pm10, category: category, observedAt: observedAt, err: fetchErr,
+		}
+	}()
 
-	var conditions OutdoorConditions
-	if err = json.Unmarshal([]byte(text), &conditions); err != nil {
-		return OutdoorConditions{}, fmt.Errorf("invalid outdoor payload: %w", err)
+	temperature := <-temperatureResults
+	airQuality := <-airQualityResults
+	conditions := OutdoorConditions{
+		AirQualityCategory: "unknown",
+		DataQuality:        "forecast",
+		FetchedAt:          now.UnixMilli(),
 	}
-	conditions.TemperatureC = nil
-	conditions.PM2 = boundedOutdoorMetric(conditions.PM2, 0, 2000)
-	conditions.PM10 = boundedOutdoorMetric(conditions.PM10, 0, 2000)
-	conditions.AirQualityCategory = normalizeOutdoorCategory(conditions.AirQualityCategory)
-	conditions.DataQuality = normalizeOutdoorDataQuality(conditions.DataQuality)
-	conditions.ObservedAt = normalizeOutdoorObservedAt(conditions.ObservedAt, now)
-	temperature, observedAt, weatherErr := provider.fetchCurrentTemperature(ctx, now)
-	if weatherErr != nil {
-		log.Printf("current outdoor temperature unavailable: %v", weatherErr)
+	if temperature.err != nil {
+		log.Printf("current outdoor temperature unavailable: %v", temperature.err)
 	} else {
-		conditions.TemperatureC = &temperature
-		conditions.ObservedAt = &observedAt
-		if conditions.PM2 != nil || conditions.PM10 != nil || conditions.AirQualityCategory != "unknown" {
-			conditions.DataQuality = "mixed"
-		} else {
-			conditions.DataQuality = "forecast"
+		conditions.TemperatureC = &temperature.value
+		conditions.TemperatureObservedAt = &temperature.observedAt
+		conditions.TemperatureSources = []AlertSource{{
+			Title: "Open-Meteo",
+			URL:   "https://open-meteo.com/en/docs",
+		}}
+	}
+	if airQuality.err != nil {
+		log.Printf("current outdoor air quality unavailable: %v", airQuality.err)
+	} else {
+		conditions.PM2 = airQuality.pm2
+		conditions.PM10 = airQuality.pm10
+		conditions.AirQualityCategory = airQuality.category
+		conditions.AirQualityObservedAt = &airQuality.observedAt
+		conditions.AirQualitySources = []AlertSource{
+			{Title: "Open-Meteo", URL: "https://open-meteo.com/en/docs/air-quality-api"},
+			{Title: "CAMS ENSEMBLE", URL: "https://atmosphere.copernicus.eu/"},
 		}
 	}
-	conditions.FetchedAt = now.UnixMilli()
-	conditions.Sources = provider.sanitizedSources(responseSourceURLs(modelResponse))
-	if weatherErr == nil {
-		conditions.Sources = appendOutdoorSource(conditions.Sources, AlertSource{
-			Title: "Open-Meteo",
-			URL:   "https://open-meteo.com/",
-		})
-	}
-	if len(conditions.Sources) == 0 {
-		return OutdoorConditions{}, fmt.Errorf("outdoor response did not include a safe citation")
-	}
-	if conditions.ObservedAt == nil {
-		return OutdoorConditions{}, fmt.Errorf("outdoor response did not include a current observation timestamp")
-	}
+
 	if !hasUsefulOutdoorData(conditions) {
-		return OutdoorConditions{}, fmt.Errorf("outdoor response did not include usable conditions")
+		return OutdoorConditions{}, fmt.Errorf(
+			"outdoor data unavailable: weather=%v; air_quality=%v",
+			temperature.err,
+			airQuality.err,
+		)
 	}
+
+	conditions.Sources = mergeAlertSources(
+		conditions.TemperatureSources,
+		conditions.AirQualitySources,
+	)
 	return conditions, nil
 }
 
-func outdoorConditionsSchema() map[string]any {
-	return map[string]any{
-		"type":                 "object",
-		"additionalProperties": false,
-		"required": []string{
-			"temperature_c",
-			"pm2",
-			"pm10",
-			"air_quality_category",
-			"observed_at",
-			"data_quality",
-		},
-		"properties": map[string]any{
-			"temperature_c": map[string]any{"type": []string{"number", "null"}},
-			"pm2":           map[string]any{"type": []string{"number", "null"}},
-			"pm10":          map[string]any{"type": []string{"number", "null"}},
-			"air_quality_category": map[string]any{
-				"type": "string",
-				"enum": []string{"good", "moderate", "poor", "very_poor", "unknown"},
-			},
-			"observed_at": map[string]any{"type": []string{"string", "null"}},
-			"data_quality": map[string]any{
-				"type": "string",
-				"enum": []string{"observed", "forecast", "mixed", "unknown"},
-			},
-		},
-	}
-}
-
-func (provider *OpenAIOutdoorProvider) fetchCurrentTemperature(
+func (provider *OpenMeteoOutdoorProvider) fetchCurrentTemperature(
 	ctx context.Context,
 	now time.Time,
+	latitude float64,
+	longitude float64,
 ) (float64, string, error) {
-	latitude, longitude, err := provider.resolveCoordinates(ctx)
-	if err != nil {
-		return 0, "", err
-	}
-
 	endpoint, err := url.Parse(provider.weatherBaseURL + "/v1/forecast")
 	if err != nil {
 		return 0, "", fmt.Errorf("build weather URL: %w", err)
 	}
 	query := endpoint.Query()
-	query.Set("latitude", strconv.FormatFloat(latitude, 'f', 6, 64))
-	query.Set("longitude", strconv.FormatFloat(longitude, 'f', 6, 64))
+	query.Set("latitude", strconv.FormatFloat(latitude, 'f', outdoorCoordinatePrecision, 64))
+	query.Set("longitude", strconv.FormatFloat(longitude, 'f', outdoorCoordinatePrecision, 64))
 	query.Set("current", "temperature_2m")
 	query.Set("timeformat", "unixtime")
 	endpoint.RawQuery = query.Encode()
 
 	var payload struct {
 		Current struct {
-			Time         int64   `json:"time"`
-			TemperatureC float64 `json:"temperature_2m"`
+			Time         int64    `json:"time"`
+			TemperatureC *float64 `json:"temperature_2m"`
 		} `json:"current"`
 	}
 	if err = provider.getJSON(ctx, endpoint.String(), &payload); err != nil {
 		return 0, "", fmt.Errorf("fetch current weather: %w", err)
 	}
-	temperature := boundedOutdoorMetric(&payload.Current.TemperatureC, -60, 60)
+	temperature := boundedOutdoorMetric(payload.Current.TemperatureC, -60, 60)
 	if temperature == nil {
 		return 0, "", fmt.Errorf("current weather temperature was invalid")
 	}
-	observed := time.Unix(payload.Current.Time, 0).UTC().Format(time.RFC3339)
-	normalizedObserved := normalizeOutdoorObservedAt(&observed, now)
-	if normalizedObserved == nil {
+	observedAt := normalizeOutdoorUnixTimestamp(payload.Current.Time, now)
+	if observedAt == nil {
 		return 0, "", fmt.Errorf("current weather timestamp was stale")
 	}
-	return *temperature, *normalizedObserved, nil
+	return *temperature, *observedAt, nil
 }
 
-func (provider *OpenAIOutdoorProvider) resolveCoordinates(ctx context.Context) (float64, float64, error) {
+func (provider *OpenMeteoOutdoorProvider) fetchCurrentAirQuality(
+	ctx context.Context,
+	now time.Time,
+	latitude float64,
+	longitude float64,
+) (*float64, *float64, string, string, error) {
+	endpoint, err := url.Parse(provider.airQualityBaseURL + "/v1/air-quality")
+	if err != nil {
+		return nil, nil, "unknown", "", fmt.Errorf("build air-quality URL: %w", err)
+	}
+	query := endpoint.Query()
+	query.Set("latitude", strconv.FormatFloat(latitude, 'f', outdoorCoordinatePrecision, 64))
+	query.Set("longitude", strconv.FormatFloat(longitude, 'f', outdoorCoordinatePrecision, 64))
+	query.Set("current", "pm2_5,pm10,european_aqi")
+	query.Set("domains", "cams_europe")
+	query.Set("timeformat", "unixtime")
+	endpoint.RawQuery = query.Encode()
+
+	var payload struct {
+		Current struct {
+			Time        int64    `json:"time"`
+			PM2         *float64 `json:"pm2_5"`
+			PM10        *float64 `json:"pm10"`
+			EuropeanAQI *float64 `json:"european_aqi"`
+		} `json:"current"`
+	}
+	if err = provider.getJSON(ctx, endpoint.String(), &payload); err != nil {
+		return nil, nil, "unknown", "", fmt.Errorf("fetch current air quality: %w", err)
+	}
+
+	observedAt := normalizeOutdoorUnixTimestamp(payload.Current.Time, now)
+	if observedAt == nil {
+		return nil, nil, "unknown", "", fmt.Errorf("current air-quality timestamp was stale")
+	}
+	pm2 := boundedOutdoorMetric(payload.Current.PM2, 0, 2000)
+	pm10 := boundedOutdoorMetric(payload.Current.PM10, 0, 2000)
+	category := outdoorCategoryFromEuropeanAQI(payload.Current.EuropeanAQI)
+	if pm2 == nil && pm10 == nil && category == "unknown" {
+		return nil, nil, "unknown", "", fmt.Errorf("current air-quality values were unavailable")
+	}
+	return pm2, pm10, category, *observedAt, nil
+}
+
+func (provider *OpenMeteoOutdoorProvider) resolveCoordinates(ctx context.Context) (float64, float64, error) {
 	provider.coordinatesMu.Lock()
 	defer provider.coordinatesMu.Unlock()
 	if provider.hasCoordinates {
 		return provider.latitude, provider.longitude, nil
 	}
 
-	postcode := strings.ReplaceAll(strings.ToUpper(provider.location), " ", "")
+	postcode := strings.ReplaceAll(strings.ToUpper(string(provider.location)), " ", "")
 	endpoint := provider.postcodeBaseURL + "/postcodes/" + url.PathEscape(postcode)
 	var payload struct {
 		Result *struct {
@@ -490,83 +495,43 @@ func (provider *OpenAIOutdoorProvider) resolveCoordinates(ctx context.Context) (
 	return provider.latitude, provider.longitude, nil
 }
 
-func (provider *OpenAIOutdoorProvider) getJSON(ctx context.Context, endpoint string, target any) error {
+func (provider *OpenMeteoOutdoorProvider) getJSON(ctx context.Context, endpoint string, target any) error {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return fmt.Errorf("build request: %w", err)
+		return fmt.Errorf("build request failed")
 	}
 	request.Header.Set("Accept", "application/json")
 
 	response, err := provider.httpClient.Do(request)
 	if err != nil {
-		return err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		if errors.Is(err, context.Canceled) {
+			return context.Canceled
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return context.DeadlineExceeded
+		}
+		return fmt.Errorf("request failed")
 	}
 	defer response.Body.Close()
 	if response.StatusCode >= http.StatusMultipleChoices {
 		return fmt.Errorf("status %d", response.StatusCode)
 	}
 	if err = json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(target); err != nil {
-		return fmt.Errorf("decode response: %w", err)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		if errors.Is(err, context.Canceled) {
+			return context.Canceled
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return context.DeadlineExceeded
+		}
+		return fmt.Errorf("decode response failed")
 	}
 	return nil
-}
-
-func (provider *OpenAIOutdoorProvider) sanitizedSources(rawURLs []string) []AlertSource {
-	sources := make([]AlertSource, 0, 3)
-	seenProviders := make(map[string]struct{})
-	for _, rawURL := range rawURLs {
-		source, ok := sanitizeOutdoorSource(rawURL)
-		if !ok {
-			continue
-		}
-		if _, exists := seenProviders[source.Title]; exists {
-			continue
-		}
-		seenProviders[source.Title] = struct{}{}
-		sources = append(sources, source)
-		if len(sources) == 3 {
-			break
-		}
-	}
-	return sources
-}
-
-func sanitizeOutdoorSource(rawURL string) (AlertSource, bool) {
-	parsed, err := url.Parse(strings.TrimSpace(rawURL))
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" {
-		return AlertSource{}, false
-	}
-	host := strings.ToLower(parsed.Hostname())
-	if !outdoorDomainAllowed(host) {
-		return AlertSource{}, false
-	}
-	parsed.Path = "/"
-	parsed.RawPath = ""
-	parsed.RawQuery = ""
-	parsed.Fragment = ""
-	return AlertSource{Title: outdoorSourceTitle(host), URL: parsed.String()}, true
-}
-
-func outdoorDomainAllowed(host string) bool {
-	for _, domain := range outdoorAllowedDomains {
-		if host == domain || strings.HasSuffix(host, "."+domain) {
-			return true
-		}
-	}
-	return false
-}
-
-func outdoorSourceTitle(host string) string {
-	switch {
-	case strings.HasSuffix(host, "metoffice.gov.uk"):
-		return "Met Office"
-	case strings.HasSuffix(host, "uk-air.defra.gov.uk"):
-		return "UK-AIR"
-	case strings.HasSuffix(host, "gov.uk"):
-		return "GOV.UK"
-	default:
-		return "Outdoor source"
-	}
 }
 
 func cloneAlertSources(sources []AlertSource) []AlertSource {
@@ -575,16 +540,37 @@ func cloneAlertSources(sources []AlertSource) []AlertSource {
 	return output
 }
 
-func appendOutdoorSource(sources []AlertSource, source AlertSource) []AlertSource {
-	for _, existing := range sources {
-		if existing.Title == source.Title {
-			return sources
+func mergeAlertSources(sourceGroups ...[]AlertSource) []AlertSource {
+	var merged []AlertSource
+	seen := make(map[string]struct{})
+	for _, sources := range sourceGroups {
+		for _, source := range sources {
+			key := source.Title + "\x00" + source.URL
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			merged = append(merged, source)
 		}
 	}
-	if len(sources) >= 3 {
-		sources = sources[:2]
+	return merged
+}
+
+func outdoorSourcesForTopic(conditions OutdoorConditions, topic string) []AlertSource {
+	var sources []AlertSource
+	switch topic {
+	case "temperature":
+		sources = conditions.TemperatureSources
+	case "air_quality":
+		sources = conditions.AirQualitySources
 	}
-	return append(sources, source)
+	if len(sources) > 0 {
+		return cloneAlertSources(sources)
+	}
+	if len(conditions.TemperatureSources) > 0 || len(conditions.AirQualitySources) > 0 {
+		return nil
+	}
+	return cloneAlertSources(conditions.Sources)
 }
 
 func boundedOutdoorMetric(value *float64, minimum, maximum float64) *float64 {
@@ -609,19 +595,19 @@ func normalizeOutdoorObservedAt(value *string, now time.Time) *string {
 	return &normalized
 }
 
-func (provider *OpenAIOutdoorProvider) currentTime() time.Time {
+func normalizeOutdoorUnixTimestamp(timestamp int64, now time.Time) *string {
+	if timestamp <= 0 {
+		return nil
+	}
+	value := time.Unix(timestamp, 0).UTC().Format(time.RFC3339)
+	return normalizeOutdoorObservedAt(&value, now)
+}
+
+func (provider *OpenMeteoOutdoorProvider) currentTime() time.Time {
 	if provider.now != nil {
 		return provider.now()
 	}
 	return time.Now()
-}
-
-func outdoorLocalTime(now time.Time) time.Time {
-	location, err := time.LoadLocation("Europe/London")
-	if err != nil {
-		return now.UTC()
-	}
-	return now.In(location)
 }
 
 func baseURLOrDefault(value, fallback string) string {
@@ -636,21 +622,28 @@ func hasUsefulOutdoorData(conditions OutdoorConditions) bool {
 		conditions.AirQualityCategory != "unknown"
 }
 
-func normalizeOutdoorCategory(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "good", "moderate", "poor", "very_poor":
-		return strings.ToLower(strings.TrimSpace(value))
-	default:
-		return "unknown"
-	}
+func hasCompleteOutdoorData(conditions OutdoorConditions) bool {
+	return conditions.TemperatureC != nil && conditions.PM2 != nil && conditions.PM10 != nil
 }
 
-func normalizeOutdoorDataQuality(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "observed", "forecast", "mixed":
-		return strings.ToLower(strings.TrimSpace(value))
-	default:
+func outdoorCategoryFromEuropeanAQI(value *float64) string {
+	aqi := boundedOutdoorMetric(value, 0, 1000)
+	if aqi == nil {
 		return "unknown"
+	}
+	switch {
+	case *aqi <= 20:
+		return "good"
+	case *aqi <= 40:
+		return "fair"
+	case *aqi <= 60:
+		return "moderate"
+	case *aqi <= 80:
+		return "poor"
+	case *aqi <= 100:
+		return "very_poor"
+	default:
+		return "extremely_poor"
 	}
 }
 

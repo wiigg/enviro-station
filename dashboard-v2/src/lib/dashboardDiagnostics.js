@@ -102,16 +102,16 @@ function buildParticulateCheck(particulateAvailable) {
 
 function insightTriggerLabel(trigger) {
   if (trigger === "event") {
-    return "sensor change";
+    return "after a sensor change";
   }
   if (trigger === "interval") {
-    return "scheduled check";
+    return "during the scheduled check";
   }
-  if (trigger === "outdoor") {
-    return "outdoor change";
+  if (trigger === "outdoor" || trigger === "outdoor_initial") {
+    return "after outdoor data refreshed";
   }
   if (trigger === "warmup" || trigger === "startup") {
-    return "startup";
+    return "at startup";
   }
   return "";
 }
@@ -127,16 +127,16 @@ function buildInsightsCheck({
   if (insightsError) {
     return {
       id: "insights",
-      label: "AI insights",
+      label: "Insights",
       state: "warn",
       summary: "Insights are unavailable; live monitoring is unaffected.",
-      action: "Check the backend AI logs and configuration if this persists."
+      action: "Check the backend insight logs and configuration if this persists."
     };
   }
   if (isLoadingInsights && !insights.length) {
     return {
       id: "insights",
-      label: "AI insights",
+      label: "Insights",
       state: "pending",
       summary: "Checking the latest insight snapshot.",
       action: ""
@@ -145,7 +145,7 @@ function buildInsightsCheck({
   if (!insights.length) {
     return {
       id: "insights",
-      label: "AI insights",
+      label: "Insights",
       state: "pending",
       summary: "Waiting for the first generated insight.",
       action: ""
@@ -160,10 +160,10 @@ function buildInsightsCheck({
   ) {
     return {
       id: "insights",
-      label: "AI insights",
+      label: "Insights",
       state: "warn",
       summary: `Last refreshed ${formatAge(generatedAt, now)}.`,
-      action: "Check backend AI logs; the safety refresh should run every six hours."
+      action: "Check backend insight logs; the safety refresh should run every hour."
     };
   }
 
@@ -171,11 +171,11 @@ function buildInsightsCheck({
     ? ` · updated ${formatAge(generatedAt, now)}`
     : "";
   const trigger = insightTriggerLabel(insightTrigger);
-  const reason = trigger ? ` via ${trigger}` : "";
+  const reason = trigger ? ` ${trigger}` : "";
 
   return {
     id: "insights",
-    label: "AI insights",
+    label: "Insights",
     state: "ok",
     summary: `Insights ready${updated}${reason}.`,
     action: ""
