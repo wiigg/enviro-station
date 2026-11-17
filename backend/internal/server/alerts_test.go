@@ -76,6 +76,9 @@ func TestDailyLimitedAnalyzerUsesDeterministicInsightsAfterLimit(t *testing.T) {
 	if len(alerts) != 1 || alerts[0].Topic != "air_quality" {
 		t.Fatalf("expected deterministic threshold insight, got %#v", alerts)
 	}
+	if alerts[0].Severity != "warn" || strings.Contains(alerts[0].Message, "(+0.0)") {
+		t.Fatalf("expected a warning without a trend from a single reading, got %#v", alerts[0])
+	}
 	if analyzer.Source() != "rules" {
 		t.Fatalf("expected deterministic source after budget exhaustion, got %q", analyzer.Source())
 	}
@@ -1226,6 +1229,40 @@ func TestFallbackStableAlertProducesInsight(t *testing.T) {
 	}
 	if strings.TrimSpace(alert.Message) == "" {
 		t.Fatalf("expected non-empty message")
+	}
+}
+
+func TestFallbackParticulateAlertsUseCurrentSeverityAndSignedChanges(t *testing.T) {
+	tests := []struct {
+		name                  string
+		firstPM2, firstPM10   float64
+		latestPM2, latestPM10 float64
+		severity, kind        string
+		pm2Text, pm10Text     string
+	}{
+		{"opposing trends", 20, 30, 12, 60, "critical", "alert", "PM2.5 is 12.0 µg/m³ (-8.0)", "PM10 is 60.0 µg/m³ (+30.0)"},
+		{"falling but critical", 40, 75, 25, 53, "critical", "alert", "PM2.5 is 25.0 µg/m³ (-15.0)", "PM10 is 53.0 µg/m³ (-22.0)"},
+		{"unchanged at warning threshold", 8, 14, 8, 14, "warn", "alert", "PM2.5 is 8.0 µg/m³ (+0.0)", "PM10 is 14.0 µg/m³ (+0.0)"},
+		{"rising within normal range", 1, 5, 7, 23, "info", "insight", "PM2.5 is 7.0 µg/m³ (+6.0)", "PM10 is 23.0 µg/m³ (+18.0)"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			summary := buildAlertSummary([]SensorReading{
+				{Timestamp: 1000, PM2: test.firstPM2, PM10: test.firstPM10, Temperature: 21, Humidity: 45},
+				{Timestamp: 1600, PM2: test.latestPM2, PM10: test.latestPM10, Temperature: 21, Humidity: 45},
+			})
+			alerts := fallbackAlerts(summary, 3, defaultAlertThresholds())
+			if len(alerts) != 1 || alerts[0].Topic != "air_quality" {
+				t.Fatalf("expected one particulate alert, got %#v", alerts)
+			}
+			alert := alerts[0]
+			if alert.Severity != test.severity || alert.Kind != test.kind {
+				t.Errorf("got %s/%s, want %s/%s", alert.Kind, alert.Severity, test.kind, test.severity)
+			}
+			if !strings.Contains(alert.Message, test.pm2Text) || !strings.Contains(alert.Message, test.pm10Text) {
+				t.Errorf("unexpected particulate levels or changes: %s", alert.Message)
+			}
+		})
 	}
 }
 
