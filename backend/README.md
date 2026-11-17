@@ -38,6 +38,7 @@ Range mode notes:
 - if `device_id` is omitted, range mode uses the latest device found in the requested window
 - particulate buckets return averages in `pm1`/`pm2`/`pm10` and peaks in `pm1_max`/`pm2_max`/`pm10_max`
 - `pm_available=false` marks cached PMS5003 fallback values; range aggregation excludes them from particulate averages and peaks
+- a range bucket's `timestamp` and `latest_pm_available` describe its final sample. Its `pm_available` indicates whether any sample supplied valid particulate measurements
 - comfort and gas buckets use averages
 
 ## Environment
@@ -134,7 +135,7 @@ following a durable database access.
 
 - `POST /api/live` updates the in-memory live buffer and SSE stream immediately.
 - `POST /api/ingest` falls back to live-only acceptance when Postgres is unavailable.
-- `POST /api/ingest/batch` is intended for delayed durable writes to Postgres.
+- `POST /api/ingest/batch` acknowledges committed batches with `persisted: true`. If the durable store is unavailable, it returns HTTP 503 and the device keeps the batch on disk for retry. Upgrade the backend before the device when rolling out this acknowledgement.
 - `GET /api/readings?source=live` reads from the in-memory live buffer without touching Postgres.
 - `GET /api/ops/events?source=live` reads from the in-memory ops buffer without touching Postgres.
 - `GET /api/readings` reads persisted history from Postgres.

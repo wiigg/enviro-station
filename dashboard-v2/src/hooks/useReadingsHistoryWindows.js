@@ -1,17 +1,10 @@
-import { useCallback, useEffect } from "react";
+import { useEffect } from "react";
 import { buildReadRequestOptions, parseJSONResponse } from "../lib/dashboardApi";
-import {
-  DASHBOARD_DEVICE_ID,
-  LIVE_SOURCE_WINDOW_IDS,
-  PREFETCH_WINDOW_IDS,
-  STREAM_WINDOW_IDS,
-  WINDOW_OPTIONS_BY_ID
-} from "../lib/dashboardConfig";
-import {
-  buildHistoryUrl,
-  mergeReadingsForWindow
-} from "../lib/dashboardTransforms";
+import { DASHBOARD_DEVICE_ID, LIVE_SOURCE_WINDOW_IDS } from "../lib/dashboardConfig";
+import { buildHistoryUrl, mergeReadingsForWindow } from "../lib/dashboardTransforms";
 import { normalizeReadings } from "../lib/readings";
+
+const HISTORY_RETRY_MS = 60_000;
 
 function buildLiveOverlayUrl(backendBaseUrl, windowOption) {
   const url = new URL(`${backendBaseUrl}/api/readings`);
@@ -23,8 +16,44 @@ function buildLiveOverlayUrl(backendBaseUrl, windowOption) {
   return url.toString();
 }
 
-function shouldOverlayLiveReadings(windowId) {
-  return STREAM_WINDOW_IDS.includes(windowId) && !LIVE_SOURCE_WINDOW_IDS.has(windowId);
+async function fetchWindowReadings(backendBaseUrl, windowOption, signal) {
+  const historyUrl = buildHistoryUrl(backendBaseUrl, windowOption);
+  const options = buildReadRequestOptions(signal);
+  const response = await fetch(historyUrl, options);
+  const payload = await parseJSONResponse(
+    response,
+    `${windowOption.label} history endpoint`,
+    historyUrl,
+    backendBaseUrl
+  );
+  if (!response.ok) {
+    const message = typeof payload.error === "string"
+      ? payload.error
+      : `History request failed with status ${response.status}`;
+    throw new Error(message);
+  }
+
+  const sources = [normalizeReadings(payload.readings)];
+  if (!LIVE_SOURCE_WINDOW_IDS.has(windowOption.id) && !signal.aborted) {
+    const liveUrl = buildLiveOverlayUrl(backendBaseUrl, windowOption);
+    try {
+      const liveResponse = await fetch(liveUrl, options);
+      if (liveResponse.ok) {
+        const livePayload = await parseJSONResponse(
+          liveResponse,
+          `${windowOption.label} live overlay endpoint`,
+          liveUrl,
+          backendBaseUrl
+        );
+        sources.push(normalizeReadings(livePayload.readings));
+      }
+    } catch (error) {
+      if (!signal.aborted) {
+        console.warn("Could not load the live overlay", error);
+      }
+    }
+  }
+  return sources;
 }
 
 export function useReadingsHistoryWindows({
@@ -32,234 +61,89 @@ export function useReadingsHistoryWindows({
   historyCacheRef,
   latestLiveReadingAtRef,
   selectedWindow,
-  selectedWindowIdRef,
   syncConnectionStatus,
   setLastError,
   setReadings
 }) {
-  const loadReadingsWindow = useCallback(
-    async (targetWindowId, signal) => {
-      const targetWindow = WINDOW_OPTIONS_BY_ID[targetWindowId];
-      const historyUrl = buildHistoryUrl(backendBaseUrl, targetWindow);
-      const response = await fetch(historyUrl, buildReadRequestOptions(signal));
-      const payload = await parseJSONResponse(
-        response,
-        `${targetWindow.label} history endpoint`,
-        historyUrl,
-        backendBaseUrl
-      );
-
-      if (!response.ok) {
-        const errorMessage =
-          typeof payload.error === "string"
-            ? payload.error
-            : `History request failed with status ${response.status}`;
-        throw new Error(errorMessage);
-      }
-
-      let normalized = normalizeReadings(payload.readings);
-      if (shouldOverlayLiveReadings(targetWindowId)) {
-        const liveUrl = buildLiveOverlayUrl(backendBaseUrl, targetWindow);
-        const liveResponse = await fetch(liveUrl, buildReadRequestOptions(signal));
-        const livePayload = await parseJSONResponse(
-          liveResponse,
-          `${targetWindow.label} live overlay endpoint`,
-          liveUrl,
-          backendBaseUrl
-        );
-
-        if (liveResponse.ok) {
-          normalized = mergeReadingsForWindow(
-            [normalized, normalizeReadings(livePayload.readings)],
-            targetWindow
-          );
-        }
-      }
-      historyCacheRef.current[targetWindowId] = {
-        readings: normalized,
-        fetchedAt: Date.now(),
-        isHydrated: true
-      };
-      return normalized;
-    },
-    [backendBaseUrl, historyCacheRef]
-  );
-
   useEffect(() => {
-    let closed = false;
+    const { id, cacheTtlMs } = selectedWindow;
+    const isLive = LIVE_SOURCE_WINDOW_IDS.has(id);
     const abortController = new AbortController();
-    const cacheEntry = historyCacheRef.current[selectedWindow.id];
+    const { signal } = abortController;
+    let timer = null;
+    let loading = false;
+    const cached = historyCacheRef.current[id];
+    let nextFetchAt = cached?.fetchedAt == null ? 0 : cached.fetchedAt + cacheTtlMs;
 
-    if (cacheEntry) {
-      setReadings(cacheEntry.readings);
-      setLastError("");
-      if (LIVE_SOURCE_WINDOW_IDS.has(selectedWindow.id)) {
-        latestLiveReadingAtRef.current =
-          cacheEntry.readings[cacheEntry.readings.length - 1]?.timestamp ?? 0;
-        syncConnectionStatus();
-      }
-    } else {
-      setReadings([]);
-      if (LIVE_SOURCE_WINDOW_IDS.has(selectedWindow.id)) {
-        latestLiveReadingAtRef.current = 0;
+    function display(readings) {
+      setReadings(readings);
+      if (isLive) {
+        latestLiveReadingAtRef.current = readings.at(-1)?.timestamp ?? 0;
         syncConnectionStatus();
       }
     }
 
-    const shouldRevalidate =
-      !cacheEntry?.isHydrated ||
-      Date.now() - cacheEntry.fetchedAt > selectedWindow.cacheTtlMs;
-    if (!shouldRevalidate) {
-      return () => {
-        abortController.abort();
-      };
-    }
-
-    async function revalidateSelectedWindow() {
+    async function refresh() {
+      loading = true;
       try {
-        const normalized = await loadReadingsWindow(selectedWindow.id, abortController.signal);
-        if (closed || abortController.signal.aborted) {
+        const sources = await fetchWindowReadings(backendBaseUrl, selectedWindow, signal);
+        if (signal.aborted) {
           return;
         }
-        if (selectedWindowIdRef.current === selectedWindow.id) {
-          setReadings(normalized);
-        }
-        if (LIVE_SOURCE_WINDOW_IDS.has(selectedWindow.id)) {
-          latestLiveReadingAtRef.current =
-            normalized[normalized.length - 1]?.timestamp ?? 0;
-          syncConnectionStatus();
-        }
+        // The stream stays connected during HTTP requests. Keep samples that
+        // arrived after the server took its snapshot.
+        const readings = mergeReadingsForWindow(
+          [historyCacheRef.current.live?.readings ?? [], ...sources],
+          selectedWindow
+        );
+        const fetchedAt = Date.now();
+        historyCacheRef.current[id] = { readings, fetchedAt };
+        nextFetchAt = fetchedAt + cacheTtlMs;
+        display(readings);
         setLastError("");
       } catch (error) {
-        if (closed || abortController.signal.aborted) {
-          return;
-        }
-        const message = error instanceof Error ? error.message : "History request failed";
-        setLastError(message);
-      }
-    }
-
-    revalidateSelectedWindow();
-
-    return () => {
-      closed = true;
-      abortController.abort();
-    };
-  }, [
-    historyCacheRef,
-    latestLiveReadingAtRef,
-    loadReadingsWindow,
-    selectedWindow.cacheTtlMs,
-    selectedWindow.id,
-    selectedWindowIdRef,
-    syncConnectionStatus,
-    setLastError,
-    setReadings
-  ]);
-
-  useEffect(() => {
-    if (LIVE_SOURCE_WINDOW_IDS.has(selectedWindow.id)) {
-      return undefined;
-    }
-
-    let closed = false;
-    let timerId = null;
-    let activeAbortController = null;
-
-    const schedule = () => {
-      timerId = window.setTimeout(runRefresh, selectedWindow.cacheTtlMs);
-    };
-
-    async function runRefresh() {
-      activeAbortController = new AbortController();
-
-      try {
-        const normalized = await loadReadingsWindow(
-          selectedWindow.id,
-          activeAbortController.signal
-        );
-        if (closed || activeAbortController.signal.aborted) {
-          return;
-        }
-        if (selectedWindowIdRef.current === selectedWindow.id) {
-          setReadings(normalized);
-          setLastError("");
-        }
-      } catch (error) {
-        if (closed || activeAbortController.signal.aborted) {
-          return;
-        }
-        if (selectedWindowIdRef.current === selectedWindow.id) {
-          const message = error instanceof Error ? error.message : "History request failed";
-          setLastError(message);
+        if (!signal.aborted) {
+          setLastError(error instanceof Error ? error.message : "History request failed");
+          nextFetchAt = Date.now() + Math.min(cacheTtlMs, HISTORY_RETRY_MS);
         }
       } finally {
-        activeAbortController = null;
-        if (!closed) {
+        loading = false;
+        if (!isLive && !signal.aborted) {
           schedule();
         }
       }
     }
 
-    schedule();
-
-    return () => {
-      closed = true;
-      if (timerId) {
-        window.clearTimeout(timerId);
+    function schedule() {
+      window.clearTimeout(timer);
+      if (document.visibilityState === "hidden" || loading) {
+        return;
       }
-      if (activeAbortController) {
-        activeAbortController.abort();
-      }
-    };
-  }, [
-    loadReadingsWindow,
-    selectedWindow.cacheTtlMs,
-    selectedWindow.id,
-    selectedWindowIdRef,
-    setLastError,
-    setReadings
-  ]);
-
-  useEffect(() => {
-    let closed = false;
-    const abortControllers = [];
-
-    async function prefetchPrimaryWindows() {
-      for (const targetWindowId of PREFETCH_WINDOW_IDS) {
-        if (closed || targetWindowId === selectedWindow.id) {
-          continue;
-        }
-
-        const targetWindow = WINDOW_OPTIONS_BY_ID[targetWindowId];
-        const cacheEntry = historyCacheRef.current[targetWindowId];
-        if (
-          cacheEntry?.isHydrated &&
-          Date.now() - cacheEntry.fetchedAt <= targetWindow.cacheTtlMs
-        ) {
-          continue;
-        }
-
-        const abortController = new AbortController();
-        abortControllers.push(abortController);
-
-        try {
-          await loadReadingsWindow(targetWindowId, abortController.signal);
-        } catch (_error) {
-          if (closed || abortController.signal.aborted) {
-            return;
-          }
-        }
+      const delay = nextFetchAt - Date.now();
+      if (delay <= 0) {
+        void refresh();
+      } else if (!isLive) {
+        timer = window.setTimeout(schedule, delay);
       }
     }
 
-    prefetchPrimaryWindows();
+    display(cached?.readings ?? []);
+    setLastError("");
+    document.addEventListener("visibilitychange", schedule);
+    schedule();
 
     return () => {
-      closed = true;
-      for (const abortController of abortControllers) {
-        abortController.abort();
-      }
+      abortController.abort();
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", schedule);
     };
-  }, [historyCacheRef, loadReadingsWindow, selectedWindow.id]);
+  }, [
+    backendBaseUrl,
+    historyCacheRef,
+    latestLiveReadingAtRef,
+    selectedWindow,
+    syncConnectionStatus,
+    setLastError,
+    setReadings
+  ]);
 }

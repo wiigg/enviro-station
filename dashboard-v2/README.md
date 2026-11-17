@@ -36,8 +36,8 @@ If `VITE_BACKEND_URL` is unset:
 
 - History charts use capped time-range API queries (`from`/`to`/`max_points`) backed by server-side device-scoped buckets.
 - Client-side chart downsampling uses multi-metric LTTB-style selection so particulate and temperature spikes are less likely to disappear.
-- `Live` and `1h` windows are prefetched and refreshed incrementally from SSE for realtime updates while the dashboard is open.
-- `24h` and `7d` are loaded on demand when selected and refreshed on longer cache TTLs.
+- Opening `Live` reads the backend’s in-memory buffer and connects to SSE. Historical windows load from Postgres on first selection.
+- SSE updates the charts between durable writes. The selected historical window checks Postgres every 30 minutes to match the default device batch interval. Background tabs pause those checks and fetch overdue history when visible again.
 - Insights are cached in `sessionStorage` and revalidated in the background.
 - Ops feed reads the backend live ops buffer and refreshes every 5 minutes to avoid keeping Postgres compute warm.
 

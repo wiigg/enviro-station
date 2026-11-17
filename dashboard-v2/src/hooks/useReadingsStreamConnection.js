@@ -51,7 +51,6 @@ export function useReadingsStreamConnection({
           }
 
           latestLiveReadingAtRef.current = reading.timestamp;
-          const streamUpdatedAt = Date.now();
 
           for (const targetWindowId of STREAM_WINDOW_IDS) {
             const targetWindow = WINDOW_OPTIONS_BY_ID[targetWindowId];
@@ -63,9 +62,8 @@ export function useReadingsStreamConnection({
             );
 
             historyCacheRef.current[targetWindowId] = {
-              readings: nextReadings,
-              fetchedAt: streamUpdatedAt,
-              isHydrated: cacheEntry?.isHydrated ?? false
+              ...cacheEntry,
+              readings: nextReadings
             };
 
             if (selectedWindowIdRef.current === targetWindowId) {

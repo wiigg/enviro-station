@@ -54,7 +54,8 @@ class BackendTransmitter:
         )
         self.next_live_status_interval_seconds = self.live_status_interval_seconds
         self.pending = self._load_pending()
-        self.last_flush_at = time.monotonic()
+        self.next_flush_at = time.monotonic() + self.flush_interval_seconds
+        self.flush_retry_delay = 0
         self.last_durable_at = None
         self.last_live_at = None
         self.last_live_status_at = 0
@@ -69,7 +70,7 @@ class BackendTransmitter:
         live_ok = True
         if self._live_due():
             live_ok = self._send_live_if_enabled(reading)
-        if self._flush_due():
+        if time.monotonic() >= self.next_flush_at:
             return self.flush()
         return live_ok
 
@@ -84,14 +85,10 @@ class BackendTransmitter:
         self._persist_pending()
 
     def flush(self):
-        if not self.pending:
-            self.last_flush_at = time.monotonic()
-            return True
-
         sent = 0
         while sent < len(self.pending):
             chunk = self.pending[sent : sent + self.batch_size]
-            if not self._post_json(self.batch_url, chunk):
+            if not self._post_json(self.batch_url, chunk, require_persisted=True):
                 break
             sent += len(chunk)
 
@@ -99,13 +96,14 @@ class BackendTransmitter:
             self.pending = self.pending[sent:]
             self._persist_pending()
 
-        flushed_all = len(self.pending) == 0
-        if flushed_all:
-            self.last_flush_at = time.monotonic()
-        return flushed_all
+        if self.pending:
+            self.flush_retry_delay = min(300, max(5, self.flush_retry_delay * 2))
+            self.next_flush_at = time.monotonic() + self.flush_retry_delay
+            return False
 
-    def _flush_due(self):
-        return time.monotonic() - self.last_flush_at >= self.flush_interval_seconds
+        self.flush_retry_delay = 0
+        self.next_flush_at = time.monotonic() + self.flush_interval_seconds
+        return True
 
     def _durable_due(self):
         return (
@@ -199,7 +197,7 @@ class BackendTransmitter:
             logging.warning("Unexpected backend status request error: %s", exc)
             return None
 
-    def _post_json(self, url, payload):
+    def _post_json(self, url, payload, *, require_persisted=False):
         body = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
             url,
@@ -216,6 +214,14 @@ class BackendTransmitter:
                 if response.status < 200 or response.status >= 300:
                     logging.warning("Backend returned non-2xx status %s", response.status)
                     return False
+                if require_persisted:
+                    acknowledgement = json.load(response)
+                    if (
+                        not isinstance(acknowledgement, dict)
+                        or acknowledgement.get("persisted") is not True
+                    ):
+                        logging.warning("Backend did not confirm durable batch storage")
+                        return False
                 return True
         except urllib.error.HTTPError as exc:
             logging.warning("Backend request failed with status %s", exc.code)
