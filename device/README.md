@@ -38,6 +38,18 @@ cd device
 creates `device/.venv`, runs `uv sync`, and enables automatic system updates. It
 creates `.env` from `.env.example` when no local environment file exists.
 
+For the Enviro+ display, ensure these settings are present in the applicable
+`[all]` section of `/boot/firmware/config.txt`, then reboot:
+
+```ini
+dtparam=spi=on
+dtoverlay=spi0-2cs,no_miso
+```
+
+The display uses GPIO9 for its data/command signal. The overlay releases GPIO9
+from SPI MISO while keeping both chip selects enabled; newer kernels reject
+the shared pin claim, preventing the device service from starting.
+
 ## Automatic OS maintenance
 
 The versioned policy at `config/52envirostation-unattended-upgrades` is installed
