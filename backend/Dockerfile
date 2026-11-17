@@ -1,4 +1,4 @@
-FROM golang:1.25.14-alpine AS build
+FROM golang:1.27.4-alpine AS build
 WORKDIR /src
 
 COPY go.mod ./
@@ -9,7 +9,7 @@ COPY internal ./internal
 RUN --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -o /out/enviro-ingest ./cmd/server
 
-FROM alpine:3.22
+FROM alpine:3.24.4
 RUN apk add --no-cache ca-certificates && adduser -D -H -u 10001 appuser
 WORKDIR /app
 

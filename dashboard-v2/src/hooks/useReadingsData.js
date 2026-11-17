@@ -57,7 +57,6 @@ export function useReadingsData(backendBaseUrl) {
     historyCacheRef,
     latestLiveReadingAtRef,
     selectedWindow,
-    selectedWindowIdRef,
     syncConnectionStatus,
     setLastError,
     setReadings

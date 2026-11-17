@@ -26,6 +26,9 @@ type SensorReading struct {
 	PM1Max      *float64 `json:"pm1_max,omitempty"`
 	PM2Max      *float64 `json:"pm2_max,omitempty"`
 	PM10Max     *float64 `json:"pm10_max,omitempty"`
+
+	// Range buckets also report the sensor status at their final sample.
+	LatestPMAvailable *bool `json:"latest_pm_available,omitempty"`
 }
 
 var allowedReadingKeys = map[string]struct{}{

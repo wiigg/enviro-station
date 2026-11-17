@@ -52,8 +52,9 @@ export function normalizeReading(raw) {
     output.deviceId = raw.device_id.trim();
   }
 
-  output.pmAvailable = raw.pm_available !== false;
-  if (!output.pmAvailable) {
+  const hasParticulate = raw.pm_available !== false;
+  output.pmAvailable = hasParticulate && raw.latest_pm_available !== false;
+  if (!hasParticulate) {
     output.pm1 = null;
     output.pm2 = null;
     output.pm10 = null;

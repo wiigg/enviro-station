@@ -353,7 +353,7 @@ func (store *PostgresStore) Range(
 	  SELECT
 	    ((timestamp - $1) / $3) AS bucket,
 	    output_device_id AS device_id,
-	    MIN(timestamp) AS timestamp,
+	    MAX(timestamp) AS timestamp,
 	    AVG(temperature) AS temperature,
 	    AVG(pressure) AS pressure,
 	    AVG(humidity) AS humidity,
@@ -366,11 +366,12 @@ func (store *PostgresStore) Range(
 	    COALESCE(MAX(pm1) FILTER (WHERE pm_available), 0) AS pm1_max,
 	    COALESCE(MAX(pm2) FILTER (WHERE pm_available), 0) AS pm2_max,
 	    COALESCE(MAX(pm10) FILTER (WHERE pm_available), 0) AS pm10_max,
-	    BOOL_OR(pm_available) AS pm_available
+	    BOOL_OR(pm_available) AS pm_available,
+	    (ARRAY_AGG(pm_available ORDER BY timestamp DESC, id DESC))[1] AS latest_pm_available
 	  FROM eligible_readings
 	  GROUP BY output_device_id, ((timestamp - $1) / $3)
 	)
-	SELECT device_id, timestamp, temperature, pressure, humidity, oxidised, reduced, nh3, pm1, pm2, pm10, pm1_max, pm2_max, pm10_max, pm_available
+	SELECT device_id, timestamp, temperature, pressure, humidity, oxidised, reduced, nh3, pm1, pm2, pm10, pm1_max, pm2_max, pm10_max, pm_available, latest_pm_available
 	FROM bucketed
 	ORDER BY timestamp ASC
 	LIMIT $5
@@ -397,6 +398,7 @@ func (store *PostgresStore) Range(
 		var pm2Max float64
 		var pm10Max float64
 		var pmAvailable bool
+		var latestPMAvailable bool
 		if err = rows.Scan(
 			&reading.DeviceID,
 			&reading.Timestamp,
@@ -413,6 +415,7 @@ func (store *PostgresStore) Range(
 			&pm2Max,
 			&pm10Max,
 			&pmAvailable,
+			&latestPMAvailable,
 		); err != nil {
 			return nil, err
 		}
@@ -420,6 +423,7 @@ func (store *PostgresStore) Range(
 		reading.PM2Max = float64Ptr(pm2Max)
 		reading.PM10Max = float64Ptr(pm10Max)
 		reading.PMAvailable = boolPtr(pmAvailable)
+		reading.LatestPMAvailable = boolPtr(latestPMAvailable)
 		readings = append(readings, reading)
 	}
 
