@@ -20,6 +20,18 @@ jobs:
 
   backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_PASSWORD: integration
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
     steps:
       - uses: actions/checkout@v6
 
@@ -28,9 +40,16 @@ jobs:
         with:
           go-version-file: backend/go.mod
 
+      - name: Set up device Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
       - name: Test backend
         working-directory: backend
         run: go test ./...
+        env:
+          ENVIRO_TEST_POSTGRES_URL: postgres://postgres:integration@127.0.0.1:${{ job.services.postgres.ports[5432] }}/postgres?sslmode=disable
 
   dashboard-v2:
     runs-on: ubuntu-latest
@@ -73,3 +92,6 @@ jobs:
       - name: Check device modules
         working-directory: device
         run: python -m compileall -q .
+
+      - name: Test device transmitter
+        run: python -m unittest discover -s device -p 'test_*.py'

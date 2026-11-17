@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { WINDOW_OPTIONS_BY_ID } from "./dashboardConfig";
+import { buildKpis, normalizeReading } from "./readings";
 import {
   buildTrendChartData,
   buildHistoryUrl,
@@ -36,6 +37,54 @@ describe("dashboard transforms", () => {
     expect(chartData[1].pm2Average).toBe(10);
     expect(chartData[2].pm2Average).toBe(15);
     expect(chartData[2].temperatureAverage).toBe(22);
+  });
+
+  it.each(["1h", "24h", "7d"])("preserves peaks and reports sensor dropout in %s", (id) => {
+    const windowOption = WINDOW_OPTIONS_BY_ID[id];
+    const bucketMs = Math.ceil(windowOption.retainedRangeMs / windowOption.queryMaxPoints);
+    const timestamp = Math.floor(1_800_000_000_000 / bucketMs) * bucketMs;
+    const good = {
+      timestamp, temperature: 20, humidity: 40,
+      pmAvailable: true, pm1: 3, pm2: 5, pm10: 9
+    };
+    const missing = {
+      ...good, timestamp: timestamp + 1000,
+      pmAvailable: false, pm1: null, pm2: null, pm10: null
+    };
+    const merged = mergeReadingsForWindow([[good], [missing]], windowOption);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({ pmAvailable: false, pm2Max: 5, pm10Max: 9 });
+    expect(buildKpis(merged, id).slice(0, 2)).toEqual([
+      expect.objectContaining({ value: "--", state: "muted", trend: "Sensor unavailable" }),
+      expect.objectContaining({ value: "--", state: "muted", trend: "Sensor unavailable" })
+    ]);
+    expect(buildTrendChartData(merged, merged, bucketMs)[0]).toMatchObject({ pm2: 5, pm2Average: 5 });
+
+    const restored = { ...good, timestamp: timestamp + 2000, pm2: 2 };
+    const recovered = mergeReadingsForWindow([merged, [restored]], windowOption);
+    expect(buildKpis(recovered, id)[0]).toMatchObject({ value: "2.0", state: "ok" });
+    expect(recovered[0]).toMatchObject({ pmAvailable: true, pm2Max: 5 });
+  });
+
+  it("keeps a durable bucket's peak when its last unavailable sample is also in the live buffer", () => {
+    const values = {
+      timestamp: 1_800_000_000, temperature: 21, pressure: 1012, humidity: 48,
+      oxidised: 1, reduced: 1, nh3: 1, pm1: 3, pm2: 6, pm10: 9
+    };
+    const history = normalizeReading({
+      ...values, pm_available: true, latest_pm_available: false, pm2_max: 23
+    });
+    const live = normalizeReading({ ...values, pm_available: false, pm2: 99 });
+
+    const windowOption = WINDOW_OPTIONS_BY_ID["7d"];
+    const historyOnly = mergeReadingsForWindow([[history]], windowOption);
+    const withOverlay = mergeReadingsForWindow([[history], [live]], windowOption);
+    for (const merged of [historyOnly, withOverlay]) {
+      expect(merged[0]).toMatchObject({ pmAvailable: false, pm2Max: 23 });
+      expect(buildKpis(merged, "7d")[0]).toMatchObject({ value: "--", trend: "Sensor unavailable" });
+      expect(buildTrendChartData(merged, merged, 60_000)[0]).toMatchObject({ pm2: 23, pm2Average: 6 });
+    }
   });
 
   it("builds bounded history requests for persisted windows", () => {

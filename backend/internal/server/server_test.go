@@ -313,6 +313,12 @@ func TestHandleIngestBatchAcceptsMultipleReadings(t *testing.T) {
 	if len(store.added) != 2 {
 		t.Fatalf("expected two stored readings, got %d", len(store.added))
 	}
+	var acknowledgement struct {
+		Persisted bool `json:"persisted"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&acknowledgement); err != nil || !acknowledgement.Persisted {
+		t.Fatalf("expected explicit durable acknowledgement, got %+v (error %v)", acknowledgement, err)
+	}
 }
 
 func TestHandleIngestBatchDedupesDeviceTimestamp(t *testing.T) {
@@ -341,7 +347,7 @@ func TestHandleIngestBatchDedupesDeviceTimestamp(t *testing.T) {
 	}
 }
 
-func TestHandleIngestBatchFallsBackToLiveOnlyWhenDurableStoreUnavailable(t *testing.T) {
+func TestHandleIngestBatchReturnsRetryableFailureWhenOnlyLiveDataIsAvailable(t *testing.T) {
 	store := NewRuntimeStore(nil)
 	api := NewAPI(store, "secret")
 	handler := api.Handler()
@@ -356,8 +362,8 @@ func TestHandleIngestBatchFallsBackToLiveOnlyWhenDurableStoreUnavailable(t *test
 
 	handler.ServeHTTP(response, request)
 
-	if response.Code != http.StatusAccepted {
-		t.Fatalf("expected status %d, got %d", http.StatusAccepted, response.Code)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status %d, got %d", http.StatusServiceUnavailable, response.Code)
 	}
 
 	readingsRequest := httptest.NewRequest(http.MethodGet, "/api/readings?source=live&limit=2", nil)

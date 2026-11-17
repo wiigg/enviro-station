@@ -315,27 +315,27 @@ export function filterVisibleReadings(readings, rangeMs) {
   return readings.filter((reading) => reading.timestamp >= cutoffTimestamp);
 }
 
+function mergeBucketReading(previous, reading) {
+  const next = { ...reading };
+  for (const [valueField, maxField] of PARTICULATE_MAX_FIELDS) {
+    const values = [
+      previous?.[maxField],
+      previous?.[valueField],
+      reading[maxField],
+      reading[valueField]
+    ].filter(Number.isFinite);
+    next[maxField] = values.length ? Math.max(...values) : null;
+    // Keep valid historical values for the chart. pmAvailable describes the newest sample.
+    next[valueField] = reading[valueField] ?? previous?.[valueField] ?? null;
+  }
+  return next;
+}
+
 function bucketReadingsByTime(readings, bucketMs) {
   const buckets = new Map();
-
   for (const reading of readings) {
     const bucketId = Math.floor(reading.timestamp / bucketMs);
-    const previous = buckets.get(bucketId);
-    const next = { ...reading };
-    const bucketHasParticulate = previous?.pmAvailable === true || reading.pmAvailable === true;
-    next.pmAvailable = bucketHasParticulate;
-
-    for (const [valueField, maxField] of PARTICULATE_MAX_FIELDS) {
-      const values = [
-        previous?.[maxField],
-        previous?.[valueField],
-        reading[maxField],
-        reading[valueField]
-      ].filter(Number.isFinite);
-      next[maxField] = values.length ? Math.max(...values) : null;
-    }
-
-    buckets.set(bucketId, next);
+    buckets.set(bucketId, mergeBucketReading(buckets.get(bucketId), reading));
   }
 
   return Array.from(buckets.values()).sort(
@@ -374,7 +374,12 @@ export function mergeReadingsForWindow(readingSets, windowOption) {
   for (const readings of readingSets) {
     for (const reading of readings) {
       const key = `${reading.deviceId ?? ""}:${reading.timestamp}`;
-      merged.set(key, reading);
+      const previous = merged.get(key);
+      // A raw overlay can share the final timestamp of an entire history bucket.
+      merged.set(
+        key,
+        Number.isFinite(previous?.pm2Max) ? mergeBucketReading(previous, reading) : reading
+      );
     }
   }
 

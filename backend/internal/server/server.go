@@ -301,14 +301,13 @@ func (api *API) handleIngestBatch(response http.ResponseWriter, request *http.Re
 				api.insightsEngine.OnBatch(readings)
 			}
 			log.Printf(
-				"batch accepted path=%s persisted=false count=%d remote=%s",
+				"batch received path=%s persisted=false count=%d remote=%s",
 				request.URL.Path,
 				len(readings),
 				request.RemoteAddr,
 			)
-			writeJSON(response, http.StatusAccepted, map[string]any{
-				"status":    "accepted",
-				"ingested":  len(readings),
+			writeJSON(response, http.StatusServiceUnavailable, map[string]any{
+				"error":     "durable store unavailable",
 				"persisted": false,
 			})
 			return
@@ -334,8 +333,9 @@ func (api *API) handleIngestBatch(response http.ResponseWriter, request *http.Re
 	)
 
 	writeJSON(response, http.StatusAccepted, map[string]any{
-		"status":   "accepted",
-		"ingested": len(readings),
+		"status":    "accepted",
+		"ingested":  len(readings),
+		"persisted": true,
 	})
 }
 

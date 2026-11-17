@@ -1423,8 +1423,7 @@ func topicNeedsFallbackAlert(summary alertSummary, topic string, thresholds Aler
 		if !summary.ParticulateAvailable {
 			return false
 		}
-		return summary.Latest.PM2 >= thresholds.PM2Threshold ||
-			summary.Latest.PM10 >= thresholds.PM10Threshold ||
+		return normalizeAlertSeverity(topic, "info", summary, thresholds) != "info" ||
 			math.Abs(summary.Delta10m.PM2) >= thresholds.PM2DeltaTrigger ||
 			math.Abs(summary.Delta10m.PM10) >= thresholds.PM10DeltaTrigger
 	case "humidity":
@@ -1443,61 +1442,24 @@ func topicNeedsFallbackAlert(summary alertSummary, topic string, thresholds Aler
 func fallbackAlertForTopic(summary alertSummary, topic string, thresholds AlertThresholds) Alert {
 	switch topic {
 	case "air_quality":
-		pm2Delta := summary.Delta10m.PM2
-		pm10Delta := summary.Delta10m.PM10
-
-		if pm2Delta <= -thresholds.PM2DeltaTrigger || pm10Delta <= -thresholds.PM10DeltaTrigger {
-			return Alert{
-				Topic:    topic,
-				Kind:     "insight",
-				Severity: "info",
-				Title:    "Air quality improving",
-				Message: trimToLength(
-					fmt.Sprintf(
-						"PM2.5 fell %.1f ug/m3 and PM10 fell %.1f ug/m3 over 10 min; now %.1f/%.1f ug/m3.",
-						math.Abs(pm2Delta),
-						math.Abs(pm10Delta),
-						summary.Latest.PM2,
-						summary.Latest.PM10,
-					),
-					alertMessageMaxLength,
-				),
-			}
+		severity := normalizeAlertSeverity(topic, "info", summary, thresholds)
+		kind, title := "insight", "Particulate levels"
+		if severity != "info" {
+			kind, title = "alert", "Elevated particulate levels"
 		}
-		if summary.Latest.PM2 >= thresholds.PM2Threshold ||
-			summary.Latest.PM10 >= thresholds.PM10Threshold ||
-			pm2Delta >= thresholds.PM2DeltaTrigger ||
-			pm10Delta >= thresholds.PM10DeltaTrigger {
-			return Alert{
-				Topic:    topic,
-				Kind:     "alert",
-				Severity: "warn",
-				Title:    "Particulates rising",
-				Message: trimToLength(
-					fmt.Sprintf(
-						"PM2.5 is %.1f ug/m3 and PM10 is %.1f ug/m3, with a 10 min change of %.1f/%.1f ug/m3.",
-						summary.Latest.PM2,
-						summary.Latest.PM10,
-						pm2Delta,
-						pm10Delta,
-					),
-					alertMessageMaxLength,
-				),
-			}
+		message := fmt.Sprintf("PM2.5 is %.1f µg/m³ and PM10 is %.1f µg/m³.", summary.Latest.PM2, summary.Latest.PM10)
+		if summary.ParticulateSamples > 1 {
+			message = fmt.Sprintf(
+				"Compared with the earlier reading, PM2.5 is %.1f µg/m³ (%+.1f) and PM10 is %.1f µg/m³ (%+.1f).",
+				summary.Latest.PM2, summary.Delta10m.PM2, summary.Latest.PM10, summary.Delta10m.PM10,
+			)
 		}
 		return Alert{
 			Topic:    topic,
-			Kind:     "insight",
-			Severity: "info",
-			Title:    "Air quality steady",
-			Message: trimToLength(
-				fmt.Sprintf(
-					"PM2.5 is %.1f ug/m3 and PM10 is %.1f ug/m3 with no sharp change over the last 10 min.",
-					summary.Latest.PM2,
-					summary.Latest.PM10,
-				),
-				alertMessageMaxLength,
-			),
+			Kind:     kind,
+			Severity: severity,
+			Title:    title,
+			Message:  trimToLength(message, alertMessageMaxLength),
 		}
 	case "humidity":
 		delta := summary.Delta10m.Humidity
